@@ -10,6 +10,7 @@ import (
 	"strconv"
 
 	"github.com/tarasglek/caddy-reverse-bin/detectorschema"
+	"github.com/tarasglek/reverse-bin-detector/internal/sandbox"
 )
 
 type Context struct {
@@ -112,7 +113,7 @@ func (denoProvider) Build(ctx Context, _ Match, transport Transport) (detectorsc
 	if transport.Kind == "unix" {
 		return detectorschema.DetectorOutput{}, fmt.Errorf("main.ts does not support SOCKET_PATH")
 	}
-	executable := []string{"deno", "serve", "--watch", "--allow-all", "--host", transport.Host, "--port", transport.Port, "main.ts"}
+	executable := sandbox.DenoServeArgs(transport.Host, transport.Port, "main.ts")
 	return output(executable, ctx.AppDir, transport.ReverseProxyTo), nil
 }
 
