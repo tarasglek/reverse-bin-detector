@@ -5,61 +5,39 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 )
 
 func TestLoadAppEnvLoadsDotEnv(t *testing.T) {
 	appDir := t.TempDir()
-	writeFile(t, filepath.Join(appDir, ".env"), "CUSTOM=1\nQUOTED=hello world\n")
-
-	env, err := LoadAppEnv(context.Background(), appDir, nil)
+	writeFile(t, filepath.Join(appDir, ".env"), "CUSTOM=1\nQUOTED='hello world'\nREVERSE_BIN_PORT=\n")
+	env, err := LoadAppEnv(context.Background(), appDir)
 	if err != nil {
 		t.Fatalf("LoadAppEnv: %v", err)
 	}
-
-	want := map[string]string{"CUSTOM": "1", "QUOTED": "hello world"}
-	if !reflect.DeepEqual(env, want) {
-		t.Fatalf("env = %#v, want %#v", env, want)
+	for key, want := range map[string]string{"CUSTOM": "1", "QUOTED": "hello world", "REVERSE_BIN_PORT": ""} {
+		if got := env[key]; got != want {
+			t.Fatalf("env[%s] = %q, want %q", key, got, want)
+		}
 	}
 }
 
-func TestLoadAppEnvPreservesBlankDotEnvValues(t *testing.T) {
+func TestLoadAppEnvDecryptsSecretsEncJSONWithSOPS(t *testing.T) {
 	appDir := t.TempDir()
-	writeFile(t, filepath.Join(appDir, ".env"), "REVERSE_BIN_PORT=\n")
-
-	env, err := LoadAppEnv(context.Background(), appDir, nil)
+	binDir := t.TempDir()
+	writeFile(t, filepath.Join(appDir, "secrets.enc.json"), `{"sops":"metadata"}`+"\n")
+	fakeSOPS := filepath.Join(binDir, "sops")
+	writeFile(t, fakeSOPS, "#!/bin/sh\nprintf '%s\\n' 'SECRET=from-sops' 'EMPTY='\n")
+	if err := os.Chmod(fakeSOPS, 0o755); err != nil {
+		t.Fatalf("chmod fake sops: %v", err)
+	}
+	t.Setenv("PATH", binDir)
+	env, err := LoadAppEnv(context.Background(), appDir)
 	if err != nil {
 		t.Fatalf("LoadAppEnv: %v", err)
 	}
-
-	if got, ok := env["REVERSE_BIN_PORT"]; !ok || got != "" {
-		t.Fatalf("REVERSE_BIN_PORT = %q, present %v; want blank present", got, ok)
-	}
-}
-
-func TestLoadAppEnvLoadsSecretsEncJSONThroughDecryptFunc(t *testing.T) {
-	appDir := t.TempDir()
-	secretPath := filepath.Join(appDir, "secrets.enc.json")
-	writeFile(t, secretPath, `{"sops":"metadata"}`+"\n")
-
-	var gotPath string
-	decrypt := func(ctx context.Context, path string) (string, error) {
-		gotPath = path
-		return "SECRET=decrypted\nEMPTY=\nIGNORED\n", nil
-	}
-
-	env, err := LoadAppEnv(context.Background(), appDir, decrypt)
-	if err != nil {
-		t.Fatalf("LoadAppEnv: %v", err)
-	}
-
-	want := map[string]string{"SECRET": "decrypted", "EMPTY": ""}
-	if !reflect.DeepEqual(env, want) {
-		t.Fatalf("env = %#v, want %#v", env, want)
-	}
-	if gotPath != secretPath {
-		t.Fatalf("decrypt path = %q, want %q", gotPath, secretPath)
+	if env["SECRET"] != "from-sops" || env["EMPTY"] != "" {
+		t.Fatalf("env = %#v", env)
 	}
 }
 
@@ -67,13 +45,7 @@ func TestLoadAppEnvRejectsDotEnvAndSecretsTogether(t *testing.T) {
 	appDir := t.TempDir()
 	writeFile(t, filepath.Join(appDir, ".env"), "CUSTOM=plain\n")
 	writeFile(t, filepath.Join(appDir, "secrets.enc.json"), `{"CUSTOM":"encrypted"}`+"\n")
-
-	_, err := LoadAppEnv(context.Background(), appDir, func(context.Context, string) (string, error) {
-		return "CUSTOM=encrypted\n", nil
-	})
-	if err == nil {
-		t.Fatal("LoadAppEnv error = nil, want error")
-	}
+	_, err := LoadAppEnv(context.Background(), appDir)
 	if !errors.Is(err, ErrMultipleEnvSources) {
 		t.Fatalf("LoadAppEnv error = %v, want ErrMultipleEnvSources", err)
 	}
@@ -81,6 +53,9 @@ func TestLoadAppEnvRejectsDotEnvAndSecretsTogether(t *testing.T) {
 
 func writeFile(t *testing.T, path string, content string) {
 	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}

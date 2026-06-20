@@ -14,18 +14,22 @@ type LandlockOptions struct {
 	AllowUnsafeNoLandlock bool
 }
 
-func Apply(policy Policy, opts LandlockOptions) error {
+func ApplyDetection(appDir string, env map[string]string, opts LandlockOptions) error {
+	return apply(detectionPolicy(appDir, env), opts)
+}
+
+func apply(p policy, opts LandlockOptions) error {
 	if opts.AllowUnsafeNoLandlock {
 		return nil
 	}
 
 	var rules []landlock.Rule
-	for _, path := range policy.ReadOnly {
+	for _, path := range p.readOnly {
 		if rule, ok := pathRule(path, false); ok {
 			rules = append(rules, rule)
 		}
 	}
-	for _, path := range policy.ReadWrite {
+	for _, path := range p.readWrite {
 		if rule, ok := pathRule(path, true); ok {
 			rules = append(rules, rule)
 		}
@@ -36,7 +40,7 @@ func Apply(policy Policy, opts LandlockOptions) error {
 		}
 	}
 
-	if policy.DenyTCPConnect {
+	if p.denyTCPConnect {
 		// Restrict only TCP connect. This denies outgoing TCP connections while
 		// preserving bind/listen behavior needed for detector port allocation.
 		if err := landlock.MustConfig(landlock.AccessNetSet(ll.AccessNetConnectTCP)).RestrictNet(); err != nil {

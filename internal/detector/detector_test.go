@@ -105,16 +105,16 @@ func TestResolveAppBehavior(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ResolveApp: %v", err)
 			}
-			if tt.wantCmd != nil && !reflect.DeepEqual(resolved.Executable, tt.wantCmd) {
-				t.Fatalf("Executable = %#v, want %#v", resolved.Executable, tt.wantCmd)
+			if tt.wantCmd != nil && !reflect.DeepEqual(*resolved.Executable, tt.wantCmd) {
+				t.Fatalf("Executable = %#v, want %#v", *resolved.Executable, tt.wantCmd)
 			}
-			if tt.wantProxy != "" && !strings.HasPrefix(resolved.ReverseProxyTo, tt.wantProxy) {
-				t.Fatalf("ReverseProxyTo = %q, want prefix %q", resolved.ReverseProxyTo, tt.wantProxy)
+			if tt.wantProxy != "" && !strings.HasPrefix(*resolved.ReverseProxyTo, tt.wantProxy) {
+				t.Fatalf("ReverseProxyTo = %q, want prefix %q", *resolved.ReverseProxyTo, tt.wantProxy)
 			}
 			if tt.localProxy {
-				assertLocalTCP(t, resolved.ReverseProxyTo)
+				assertLocalTCP(t, *resolved.ReverseProxyTo)
 			}
-			envs := envMap(resolved.Envs)
+			envs := envMap(*resolved.Envs)
 			if got := envs["PATH"]; got != "/test/bin" {
 				t.Fatalf("PATH = %q, want /test/bin", got)
 			}
@@ -129,23 +129,23 @@ func TestResolveAppBehavior(t *testing.T) {
 
 func TestResolveAppRuntimeSandbox(t *testing.T) {
 	appDir := makeApp(t, map[string]testFile{"main.ts": {body: "console.log('hello')\n"}})
-	resolved, err := ResolveAppWithOptions(context.Background(), appDir, map[string]string{"REVERSE_BIN_PORT": "7777"}, Options{})
+	resolved, err := ResolveAppWithRuntimeSandbox(context.Background(), appDir, map[string]string{"REVERSE_BIN_PORT": "7777"}, true)
 	if err != nil {
-		t.Fatalf("ResolveAppWithOptions: %v", err)
+		t.Fatalf("ResolveAppWithRuntimeSandbox: %v", err)
 	}
-	cmd := strings.Join(resolved.Executable, " ")
+	cmd := strings.Join(*resolved.Executable, " ")
 	for _, want := range []string{"landrun", "--env DENO_NO_UPDATE_CHECK=1", "--rox " + appDir, "--unrestricted-network", "deno serve"} {
 		if !strings.Contains(cmd, want) {
 			t.Fatalf("wrapped command %q missing %q", cmd, want)
 		}
 	}
 
-	plain, err := ResolveAppWithOptions(context.Background(), appDir, map[string]string{"REVERSE_BIN_PORT": "7777"}, Options{NoRuntimeSandbox: true})
+	plain, err := ResolveAppWithRuntimeSandbox(context.Background(), appDir, map[string]string{"REVERSE_BIN_PORT": "7777"}, false)
 	if err != nil {
-		t.Fatalf("ResolveAppWithOptions no sandbox: %v", err)
+		t.Fatalf("ResolveAppWithRuntimeSandbox no sandbox: %v", err)
 	}
-	if len(plain.Executable) == 0 || plain.Executable[0] == "landrun" {
-		t.Fatalf("NoRuntimeSandbox executable = %#v, want unwrapped", plain.Executable)
+	if len(*plain.Executable) == 0 || (*plain.Executable)[0] == "landrun" {
+		t.Fatalf("NoRuntimeSandbox executable = %#v, want unwrapped", *plain.Executable)
 	}
 }
 

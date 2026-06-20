@@ -5,13 +5,13 @@ import (
 	"strings"
 )
 
-type Policy struct {
-	ReadOnly       []string
-	ReadWrite      []string
-	DenyTCPConnect bool
+type policy struct {
+	readOnly       []string
+	readWrite      []string
+	denyTCPConnect bool
 }
 
-func DetectionPolicy(appDir string, env map[string]string) Policy {
+func detectionPolicy(appDir string, env map[string]string) policy {
 	ro := []string{appDir, "/dev/null", "/bin", "/usr", "/lib", "/lib64", "/etc"}
 	if pathEnv := env["PATH"]; pathEnv != "" {
 		for _, path := range strings.Split(pathEnv, string(filepath.ListSeparator)) {
@@ -23,5 +23,5 @@ func DetectionPolicy(appDir string, env map[string]string) Policy {
 	if key := env["SOPS_AGE_KEY_FILE"]; key != "" {
 		ro = append(ro, key)
 	}
-	return Policy{ReadOnly: ro, DenyTCPConnect: true}
+	return policy{readOnly: ro, denyTCPConnect: true}
 }

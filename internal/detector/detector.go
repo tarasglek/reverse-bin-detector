@@ -7,10 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
-	"github.com/tarasglek/caddy-reverse-bin/detectorschema"
 	"github.com/tarasglek/reverse-bin-detector/internal/sandbox"
 )
 
@@ -32,38 +30,20 @@ func Run(ctx context.Context, args []string, stdout io.Writer) error {
 		return fmt.Errorf("usage: reverse-bin-detector [--allow-unsafe-no-landlock] APP_DIR")
 	}
 	appDir := fs.Arg(0)
-	decrypt, err := prepareSOPSDecrypt(ctx, appDir)
-	if err != nil {
-		return err
-	}
 	if !*allowUnsafeNoLandlock {
-		policy := sandbox.DetectionPolicy(appDir, environMap(os.Environ()))
-		if err := sandbox.Apply(policy, sandbox.LandlockOptions{}); err != nil {
+		if err := sandbox.ApplyDetection(appDir, environMap(os.Environ()), sandbox.LandlockOptions{}); err != nil {
 			return err
 		}
 	}
-
-	env, err := LoadAppEnv(ctx, appDir, decrypt)
+	env, err := LoadAppEnv(ctx, appDir)
 	if err != nil {
 		return err
 	}
-	resolved, err := ResolveAppWithOptions(ctx, appDir, env, Options{NoRuntimeSandbox: *noRuntimeSandbox})
+	out, err := ResolveAppWithRuntimeSandbox(ctx, appDir, env, !*noRuntimeSandbox)
 	if err != nil {
 		return err
 	}
-
-	output := detectorOutputFromResolved(resolved)
-	encoder := json.NewEncoder(stdout)
-	return encoder.Encode(output)
-}
-
-func prepareSOPSDecrypt(ctx context.Context, appDir string) (SOPSDecryptFunc, error) {
-	_ = ctx
-	hasSecrets, err := fileExists(filepath.Join(appDir, "secrets.enc.json"))
-	if err != nil || !hasSecrets {
-		return nil, err
-	}
-	return ResolveSOPSDecryptFunc()
+	return json.NewEncoder(stdout).Encode(out)
 }
 
 func environMap(environ []string) map[string]string {
@@ -75,17 +55,4 @@ func environMap(environ []string) map[string]string {
 		}
 	}
 	return env
-}
-
-func detectorOutputFromResolved(resolved ResolvedApp) detectorschema.DetectorOutput {
-	output := detectorschema.DetectorOutput{
-		Executable:       &resolved.Executable,
-		WorkingDirectory: &resolved.WorkingDirectory,
-		Envs:             &resolved.Envs,
-		ReverseProxyTo:   &resolved.ReverseProxyTo,
-		HealthMethod:     resolved.HealthMethod,
-		HealthPath:       resolved.HealthPath,
-		HealthStatus:     resolved.HealthStatus,
-	}
-	return output
 }

@@ -8,195 +8,163 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+
+	"github.com/tarasglek/caddy-reverse-bin/detectorschema"
 )
 
-type AppKind string
+type appKind string
 
 const (
-	AppExplicit AppKind = "explicit"
-	AppDeno     AppKind = "deno"
-	AppPython   AppKind = "python"
-	AppStatic   AppKind = "static"
+	explicitApp appKind = "explicit"
+	denoApp     appKind = "deno"
+	pythonApp   appKind = "python"
+	staticApp   appKind = "static"
 )
 
-type App struct {
-	Kind    AppKind
-	Root    string
-	Command []string
+type app struct {
+	kind appKind
+	root string
+	cmd  []string
 }
 
-type Transport struct {
-	ReverseProxyTo string
-	Listen         string
-	Host           string
-	Port           string
-	SocketPath     string
-	Kind           string
+type transport struct {
+	kind   string
+	proxy  string
+	host   string
+	port   string
+	listen string
 }
 
-type ResolvedApp struct {
-	Executable       []string
-	WorkingDirectory string
-	Envs             []string
-	ReverseProxyTo   string
-	HealthMethod     *string
-	HealthPath       *string
-	HealthStatus     *int
-	EnvOverrides     map[string]string
+func ResolveApp(ctx context.Context, appDir string, env map[string]string) (detectorschema.DetectorOutput, error) {
+	return ResolveAppWithRuntimeSandbox(ctx, appDir, env, false)
 }
 
-type Options struct {
-	NoRuntimeSandbox bool
-}
-
-func ResolveApp(ctx context.Context, appDir string, env map[string]string) (ResolvedApp, error) {
-	return ResolveAppWithOptions(ctx, appDir, env, Options{NoRuntimeSandbox: true})
-}
-
-func ResolveAppWithOptions(ctx context.Context, appDir string, env map[string]string, opts Options) (ResolvedApp, error) {
+func ResolveAppWithRuntimeSandbox(ctx context.Context, appDir string, env map[string]string, runtimeSandbox bool) (detectorschema.DetectorOutput, error) {
 	_ = ctx
 	cfg, err := LoadEnvAppConfig(env)
 	if err != nil {
-		return ResolvedApp{}, err
+		return detectorschema.DetectorOutput{}, err
 	}
 	app, err := detectApp(appDir, cfg)
 	if err != nil {
-		return ResolvedApp{}, err
+		return detectorschema.DetectorOutput{}, err
 	}
-	transport, overrides, err := resolveTransport(appDir, cfg, app.Kind)
+	tr, overrides, err := resolveTransport(appDir, cfg, app.kind)
 	if err != nil {
-		return ResolvedApp{}, err
+		return detectorschema.DetectorOutput{}, err
 	}
-	cmd, err := commandFor(app, transport)
+	cmd, err := commandFor(app, tr)
 	if err != nil {
-		return ResolvedApp{}, err
+		return detectorschema.DetectorOutput{}, err
 	}
-	envs := buildAppEnvs(appDir, env, overrides, app.Kind)
-	if !opts.NoRuntimeSandbox {
-		cmd = wrapRuntimeSandbox(cmd, appDir, transport, envs, app.Kind)
+	envs := buildAppEnvs(appDir, env, overrides, app.kind)
+	if runtimeSandbox {
+		cmd = wrapRuntimeSandbox(cmd, appDir, tr, envs, app.kind)
 	}
-	return ResolvedApp{
-		Executable:       cmd,
-		WorkingDirectory: appDir,
-		Envs:             envs,
-		ReverseProxyTo:   transport.ReverseProxyTo,
+	return schemaOutput(cmd, appDir, envs, tr.proxy, cfg), nil
+}
+
+func schemaOutput(cmd []string, appDir string, envs []string, proxy string, cfg EnvAppConfig) detectorschema.DetectorOutput {
+	return detectorschema.DetectorOutput{
+		Executable:       &cmd,
+		WorkingDirectory: &appDir,
+		Envs:             &envs,
+		ReverseProxyTo:   &proxy,
 		HealthMethod:     cfg.HealthMethod,
 		HealthPath:       cfg.HealthPath,
 		HealthStatus:     cfg.HealthStatus,
-		EnvOverrides:     overrides,
-	}, nil
+	}
 }
 
-func detectApp(appDir string, cfg EnvAppConfig) (App, error) {
+func detectApp(appDir string, cfg EnvAppConfig) (app, error) {
 	if len(cfg.Command) > 0 {
-		return App{Kind: AppExplicit, Command: append([]string(nil), cfg.Command...)}, nil
+		return app{kind: explicitApp, cmd: append([]string(nil), cfg.Command...)}, nil
 	}
-	if ok, err := regularFile(filepath.Join(appDir, "main.ts")); ok || err != nil {
-		return App{Kind: AppDeno, Root: "."}, err
+	if ok, err := isFile(appDir, "main.ts", false); ok || err != nil {
+		return app{kind: denoApp}, err
 	}
-	if ok, err := executableFile(filepath.Join(appDir, "main.py")); ok || err != nil {
-		return App{Kind: AppPython, Root: "."}, err
+	if ok, err := isFile(appDir, "main.py", true); ok || err != nil {
+		return app{kind: pythonApp}, err
 	}
-	if ok, err := regularFile(filepath.Join(appDir, "index.html")); ok || err != nil {
-		return App{Kind: AppStatic, Root: "."}, err
+	if ok, err := isFile(appDir, "index.html", false); ok || err != nil {
+		return app{kind: staticApp, root: "."}, err
 	}
-	if ok, err := regularFile(filepath.Join(appDir, "dist", "index.html")); ok || err != nil {
-		return App{Kind: AppStatic, Root: "dist"}, err
+	if ok, err := isFile(appDir, filepath.Join("dist", "index.html"), false); ok || err != nil {
+		return app{kind: staticApp, root: "dist"}, err
 	}
-	return App{}, fmt.Errorf("No supported entry point (main.ts, executable main.py, index.html, or dist/index.html) found in %s", appDir)
+	return app{}, fmt.Errorf("No supported entry point (main.ts, executable main.py, index.html, or dist/index.html) found in %s", appDir)
 }
 
-func commandFor(app App, transport Transport) ([]string, error) {
-	switch app.Kind {
-	case AppExplicit:
-		return append([]string(nil), app.Command...), nil
-	case AppDeno:
-		if transport.Kind == "unix" {
+func commandFor(a app, tr transport) ([]string, error) {
+	switch a.kind {
+	case explicitApp:
+		return append([]string(nil), a.cmd...), nil
+	case denoApp:
+		if tr.kind == "unix" {
 			return nil, fmt.Errorf("main.ts does not support SOCKET_PATH")
 		}
-		return []string{"deno", "serve", "--watch", "--allow-all", "--host", transport.Host, "--port", transport.Port, "main.ts"}, nil
-	case AppPython:
+		return []string{"deno", "serve", "--watch", "--allow-all", "--host", tr.host, "--port", tr.port, "main.ts"}, nil
+	case pythonApp:
 		return []string{"./main.py"}, nil
-	case AppStatic:
-		if transport.Kind == "unix" {
+	case staticApp:
+		if tr.kind == "unix" {
 			return nil, fmt.Errorf("static file server does not support SOCKET_PATH")
 		}
-		return []string{"reverse-bin-caddy", "file-server", "--listen", transport.Listen, "--root", app.Root}, nil
+		return []string{"reverse-bin-caddy", "file-server", "--listen", tr.listen, "--root", a.root}, nil
 	default:
-		return nil, fmt.Errorf("unknown app kind %q", app.Kind)
+		return nil, fmt.Errorf("unknown app kind %q", a.kind)
 	}
 }
 
-func regularFile(path string) (bool, error) {
-	st, err := os.Stat(path)
+func isFile(appDir, name string, executable bool) (bool, error) {
+	st, err := os.Stat(filepath.Join(appDir, name))
 	if os.IsNotExist(err) {
 		return false, nil
 	}
-	if err != nil {
+	if err != nil || !st.Mode().IsRegular() {
 		return false, err
 	}
-	return st.Mode().IsRegular(), nil
+	return !executable || st.Mode().Perm()&0o111 != 0, nil
 }
 
-func executableFile(path string) (bool, error) {
-	st, err := os.Stat(path)
-	if os.IsNotExist(err) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return st.Mode().IsRegular() && st.Mode().Perm()&0o111 != 0, nil
-}
-
-func resolveTransport(appDir string, cfg EnvAppConfig, kind AppKind) (Transport, map[string]string, error) {
+func resolveTransport(appDir string, cfg EnvAppConfig, kind appKind) (transport, map[string]string, error) {
 	if cfg.SocketPath != nil {
-		return configuredUnixTransport(appDir, *cfg.SocketPath)
+		if filepath.IsAbs(*cfg.SocketPath) {
+			return transport{}, nil, fmt.Errorf("Unix socket path must be relative")
+		}
+		path := filepath.Join(appDir, *cfg.SocketPath)
+		return transport{kind: "unix", proxy: "unix/" + path}, map[string]string{}, nil
 	}
-	if !hasTCPConfig(cfg) && kind == AppPython {
-		return defaultPythonUnixTransport(appDir), map[string]string{KeySocketPath: filepath.Join("data", "reverse-bin.sock")}, nil
+	if !hasTCPConfig(cfg) && kind == pythonApp {
+		path := filepath.Join(appDir, "data", "reverse-bin.sock")
+		return transport{kind: "unix", proxy: "unix/" + path}, map[string]string{KeySocketPath: filepath.Join("data", "reverse-bin.sock")}, nil
 	}
 	return tcpTransport(cfg)
 }
 
-func configuredUnixTransport(appDir, socketPath string) (Transport, map[string]string, error) {
-	if filepath.IsAbs(socketPath) {
-		return Transport{}, nil, fmt.Errorf("Unix socket path must be relative")
-	}
-	path := filepath.Join(appDir, socketPath)
-	return Transport{Kind: "unix", SocketPath: path, ReverseProxyTo: "unix/" + path}, map[string]string{}, nil
-}
-
-func defaultPythonUnixTransport(appDir string) Transport {
-	path := filepath.Join(appDir, "data", "reverse-bin.sock")
-	return Transport{Kind: "unix", SocketPath: path, ReverseProxyTo: "unix/" + path}
-}
-
-func tcpTransport(cfg EnvAppConfig) (Transport, map[string]string, error) {
+func tcpTransport(cfg EnvAppConfig) (transport, map[string]string, error) {
 	overrides := map[string]string{}
 	host := "127.0.0.1"
 	if cfg.ReverseBinHost != nil && *cfg.ReverseBinHost != "" {
 		host = *cfg.ReverseBinHost
 	}
-
 	port := ""
 	if cfg.Listen != nil {
-		listenHost, listenPort, err := parseListen(*cfg.Listen)
+		var err error
+		host, port, err = parseListen(*cfg.Listen)
 		if err != nil {
-			return Transport{}, nil, err
+			return transport{}, nil, err
 		}
-		host, port = listenHost, listenPort
 	} else if cfg.ReverseBinPort != nil {
 		port = *cfg.ReverseBinPort
 	}
 	if port == "" {
-		freePort, err := allocateFreeTCPPort(host)
+		var err error
+		port, err = allocateFreeTCPPort(host)
 		if err != nil {
-			return Transport{}, nil, err
+			return transport{}, nil, err
 		}
-		port = freePort
 	}
-
 	listen := host + ":" + port
 	if cfg.Listen != nil && *cfg.Listen == "" {
 		overrides[KeyListen] = listen
@@ -205,7 +173,7 @@ func tcpTransport(cfg EnvAppConfig) (Transport, map[string]string, error) {
 		overrides[KeyReverseBinHost] = host
 		overrides[KeyReverseBinPort] = port
 	}
-	return Transport{Kind: "tcp", Host: host, Port: port, Listen: listen, ReverseProxyTo: listen}, overrides, nil
+	return transport{kind: "tcp", proxy: listen, host: host, port: port, listen: listen}, overrides, nil
 }
 
 func allocateFreeTCPPort(host string) (string, error) {
@@ -221,34 +189,24 @@ func allocateFreeTCPPort(host string) (string, error) {
 	return port, nil
 }
 
-func parseListen(listen string) (host string, port string, err error) {
+func parseListen(listen string) (string, string, error) {
 	if listen == "" {
 		return "127.0.0.1", "8080", nil
 	}
-	lastColon := -1
+	host, port := "127.0.0.1", listen
 	for i := len(listen) - 1; i >= 0; i-- {
 		if listen[i] == ':' {
-			lastColon = i
+			host, port = listen[:i], listen[i+1:]
 			break
 		}
 	}
-	if lastColon >= 0 {
-		host = listen[:lastColon]
-		port = listen[lastColon+1:]
-	} else {
-		host = "127.0.0.1"
-		port = listen
-	}
-	if _, convErr := strconv.Atoi(port); convErr != nil || port == "" {
+	if _, err := strconv.Atoi(port); err != nil || port == "" {
 		return "", "", fmt.Errorf("Invalid LISTEN port")
 	}
 	return host, port, nil
 }
 
-func wrapRuntimeSandbox(command []string, appDir string, transport Transport, envs []string, kind AppKind) []string {
-	if len(command) == 0 {
-		return command
-	}
+func wrapRuntimeSandbox(command []string, appDir string, tr transport, envs []string, kind appKind) []string {
 	wrapped := []string{"landrun", "--rox", "/bin,/usr,/lib,/lib64,/proc,/sys/fs/cgroup", "--ro", "/etc", "--rw", "/dev"}
 	for _, env := range envs {
 		wrapped = append(wrapped, "--env", env)
@@ -257,16 +215,15 @@ func wrapRuntimeSandbox(command []string, appDir string, transport Transport, en
 		wrapped = append(wrapped, "--rw", filepath.Join(appDir, "data"))
 	}
 	wrapped = append(wrapped, "--rox", appDir)
-	if kind == AppDeno {
+	if kind == denoApp {
 		wrapped = append(wrapped, "--unrestricted-network")
-	} else if transport.Kind == "tcp" && transport.Port != "" {
-		wrapped = append(wrapped, "--bind-tcp", transport.Port)
+	} else if tr.kind == "tcp" && tr.port != "" {
+		wrapped = append(wrapped, "--bind-tcp", tr.port)
 	}
-	wrapped = append(wrapped, command...)
-	return wrapped
+	return append(wrapped, command...)
 }
 
-func buildAppEnvs(appDir string, appEnv map[string]string, overrides map[string]string, kind AppKind) []string {
+func buildAppEnvs(appDir string, appEnv map[string]string, overrides map[string]string, kind appKind) []string {
 	merged := make(map[string]string, len(appEnv)+len(overrides)+3)
 	for key, value := range appEnv {
 		merged[key] = value
@@ -279,13 +236,13 @@ func buildAppEnvs(appDir string, appEnv map[string]string, overrides map[string]
 			merged["PATH"] = path
 		}
 	}
-	dataDir := filepath.Join(appDir, "data")
 	if _, ok := merged["HOME"]; !ok {
+		dataDir := filepath.Join(appDir, "data")
 		if st, err := os.Stat(dataDir); err == nil && st.IsDir() {
 			merged["HOME"] = dataDir
 		}
 	}
-	if kind == AppDeno {
+	if kind == denoApp {
 		merged["DENO_NO_UPDATE_CHECK"] = "1"
 	}
 

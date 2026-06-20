@@ -8,10 +8,9 @@ type LandlockOptions struct {
 	AllowUnsafeNoLandlock bool
 }
 
-func Apply(policy Policy, opts LandlockOptions) error {
-	_ = policy
+func ApplyDetection(appDir string, env map[string]string, opts LandlockOptions) error {
 	if opts.AllowUnsafeNoLandlock {
 		return nil
 	}
-	return fmt.Errorf("landlock is unavailable on this platform")
+	return fmt.Errorf("landlock is only supported on linux")
 }

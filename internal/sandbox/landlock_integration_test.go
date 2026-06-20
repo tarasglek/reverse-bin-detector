@@ -58,8 +58,7 @@ func TestDetectionLandlockSubprocessHelper(t *testing.T) {
 		return
 	}
 	appDir := os.Getenv("SANDBOX_APP_DIR")
-	policy := DetectionPolicy(appDir, nil)
-	if err := Apply(policy, LandlockOptions{}); err != nil {
+	if err := ApplyDetection(appDir, nil, LandlockOptions{}); err != nil {
 		fmt.Printf("SKIP landlock unavailable: %v\n", err)
 		os.Exit(0)
 	}
