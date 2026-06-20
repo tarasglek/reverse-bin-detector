@@ -20,11 +20,15 @@ func Apply(policy Policy, opts LandlockOptions) error {
 	}
 
 	var rules []landlock.Rule
-	for _, path := range existingPaths(policy.ReadOnly) {
-		rules = append(rules, landlock.RODirs(path))
+	for _, path := range policy.ReadOnly {
+		if rule, ok := pathRule(path, false); ok {
+			rules = append(rules, rule)
+		}
 	}
-	for _, path := range existingPaths(policy.ReadWrite) {
-		rules = append(rules, landlock.RWDirs(path))
+	for _, path := range policy.ReadWrite {
+		if rule, ok := pathRule(path, true); ok {
+			rules = append(rules, rule)
+		}
 	}
 	if len(rules) > 0 {
 		if err := landlock.V7.RestrictPaths(rules...); err != nil {
@@ -42,15 +46,22 @@ func Apply(policy Policy, opts LandlockOptions) error {
 	return nil
 }
 
-func existingPaths(paths []string) []string {
-	out := make([]string, 0, len(paths))
-	for _, path := range paths {
-		if path == "" {
-			continue
-		}
-		if _, err := os.Stat(path); err == nil {
-			out = append(out, path)
-		}
+func pathRule(path string, readWrite bool) (landlock.Rule, bool) {
+	if path == "" {
+		return nil, false
 	}
-	return out
+	st, err := os.Stat(path)
+	if err != nil {
+		return nil, false
+	}
+	if readWrite {
+		if st.IsDir() {
+			return landlock.RWDirs(path), true
+		}
+		return landlock.RWFiles(path), true
+	}
+	if st.IsDir() {
+		return landlock.RODirs(path), true
+	}
+	return landlock.ROFiles(path), true
 }
