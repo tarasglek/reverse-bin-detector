@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/tarasglek/caddy-reverse-bin/detectorschema"
@@ -25,6 +26,10 @@ func Run(ctx context.Context, args []string, stdout io.Writer) error {
 		return fmt.Errorf("usage: reverse-bin-detector [--allow-unsafe-no-landlock] APP_DIR")
 	}
 	appDir := fs.Arg(0)
+	decrypt, err := prepareSOPSDecrypt(ctx, appDir)
+	if err != nil {
+		return err
+	}
 	if !*allowUnsafeNoLandlock {
 		policy := sandbox.DetectionPolicy(appDir, environMap(os.Environ()))
 		if err := sandbox.Apply(policy, sandbox.LandlockOptions{}); err != nil {
@@ -32,7 +37,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 	}
 
-	env, err := LoadAppEnv(ctx, appDir, nil)
+	env, err := LoadAppEnv(ctx, appDir, decrypt)
 	if err != nil {
 		return err
 	}
@@ -44,6 +49,15 @@ func Run(ctx context.Context, args []string, stdout io.Writer) error {
 	output := detectorOutputFromResolved(resolved)
 	encoder := json.NewEncoder(stdout)
 	return encoder.Encode(output)
+}
+
+func prepareSOPSDecrypt(ctx context.Context, appDir string) (SOPSDecryptFunc, error) {
+	_ = ctx
+	hasSecrets, err := fileExists(filepath.Join(appDir, "secrets.enc.json"))
+	if err != nil || !hasSecrets {
+		return nil, err
+	}
+	return ResolveSOPSDecryptFunc()
 }
 
 func environMap(environ []string) map[string]string {

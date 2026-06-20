@@ -2,10 +2,12 @@ package detector
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -42,7 +44,11 @@ func LoadAppEnv(ctx context.Context, appDir string, decrypt SOPSDecryptFunc) (ma
 		dotenv = string(data)
 	} else {
 		if decrypt == nil {
-			return nil, fmt.Errorf("decrypt secrets.enc.json: no decrypt function configured")
+			var err error
+			decrypt, err = ResolveSOPSDecryptFunc()
+			if err != nil {
+				return nil, fmt.Errorf("decrypt secrets.enc.json: %w", err)
+			}
 		}
 		var err error
 		dotenv, err = decrypt(ctx, secretsPath)
@@ -52,6 +58,31 @@ func LoadAppEnv(ctx context.Context, appDir string, decrypt SOPSDecryptFunc) (ma
 	}
 
 	return parseDotEnv(dotenv), nil
+}
+
+func ResolveSOPSDecryptFunc() (SOPSDecryptFunc, error) {
+	sopsPath, err := exec.LookPath("sops")
+	if err != nil {
+		return nil, err
+	}
+	return SOPSDecryptFuncForPath(sopsPath), nil
+}
+
+func SOPSDecryptFuncForPath(sopsPath string) SOPSDecryptFunc {
+	return func(ctx context.Context, path string) (string, error) {
+		cmd := exec.CommandContext(ctx, sopsPath, "--decrypt", "--input-type", "json", "--output-type", "dotenv", path)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		stdout, err := cmd.Output()
+		if err != nil {
+			msg := strings.TrimSpace(stderr.String())
+			if msg != "" {
+				return "", fmt.Errorf("%w: %s", err, msg)
+			}
+			return "", err
+		}
+		return string(stdout), nil
+	}
 }
 
 func fileExists(path string) (bool, error) {
