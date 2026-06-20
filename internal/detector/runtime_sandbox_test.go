@@ -26,6 +26,19 @@ func TestResolveAppEmitsRuntimeLandrunWrapper(t *testing.T) {
 	}
 }
 
+func TestResolveAppDenoRuntimeSandboxAllowsSmallwebCompatibleNetwork(t *testing.T) {
+	appDir := t.TempDir()
+	writeFile(t, filepath.Join(appDir, "main.ts"), "console.log('hello')\n")
+	resolved, err := ResolveAppWithOptions(context.Background(), appDir, map[string]string{"REVERSE_BIN_PORT": "7777"}, Options{})
+	if err != nil {
+		t.Fatalf("ResolveAppWithOptions: %v", err)
+	}
+	command := strings.Join(resolved.Executable, " ")
+	if !strings.Contains(command, "--unrestricted-network") {
+		t.Fatalf("command %q missing --unrestricted-network", command)
+	}
+}
+
 func TestResolveAppCanDisableRuntimeSandbox(t *testing.T) {
 	appDir := makeExecutableMainPyApp(t)
 	resolved, err := ResolveAppWithOptions(context.Background(), appDir, map[string]string{"REVERSE_BIN_PORT": "7777"}, Options{NoRuntimeSandbox: true})

@@ -96,7 +96,7 @@ func ResolveAppWithOptions(ctx context.Context, appDir string, env map[string]st
 			resolved.Executable = *out.Executable
 		}
 		if !opts.NoRuntimeSandbox {
-			resolved.Executable = wrapRuntimeSandbox(resolved.Executable, appDir, transport, resolved.Envs)
+			resolved.Executable = wrapRuntimeSandbox(resolved.Executable, appDir, transport, resolved.Envs, provider.Name())
 		}
 		return resolved, nil
 	}
@@ -266,7 +266,7 @@ func parseListen(listen string) (host string, port string, err error) {
 	return host, port, nil
 }
 
-func wrapRuntimeSandbox(command []string, appDir string, transport Transport, envs []string) []string {
+func wrapRuntimeSandbox(command []string, appDir string, transport Transport, envs []string, providerName string) []string {
 	if len(command) == 0 {
 		return command
 	}
@@ -278,7 +278,9 @@ func wrapRuntimeSandbox(command []string, appDir string, transport Transport, en
 		wrapped = append(wrapped, "--rw", filepath.Join(appDir, "data"))
 	}
 	wrapped = append(wrapped, "--rox", appDir)
-	if transport.Kind == "tcp" && transport.Port != "" {
+	if providerName == "deno" {
+		wrapped = append(wrapped, "--unrestricted-network")
+	} else if transport.Kind == "tcp" && transport.Port != "" {
 		wrapped = append(wrapped, "--bind-tcp", transport.Port)
 	}
 	wrapped = append(wrapped, command...)
