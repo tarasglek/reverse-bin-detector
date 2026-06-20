@@ -96,7 +96,7 @@ func ResolveAppWithOptions(ctx context.Context, appDir string, env map[string]st
 			resolved.Executable = *out.Executable
 		}
 		if !opts.NoRuntimeSandbox {
-			resolved.Executable = wrapRuntimeSandbox(resolved.Executable, appDir, transport)
+			resolved.Executable = wrapRuntimeSandbox(resolved.Executable, appDir, transport, resolved.Envs)
 		}
 		return resolved, nil
 	}
@@ -266,15 +266,21 @@ func parseListen(listen string) (host string, port string, err error) {
 	return host, port, nil
 }
 
-func wrapRuntimeSandbox(command []string, appDir string, transport Transport) []string {
+func wrapRuntimeSandbox(command []string, appDir string, transport Transport, envs []string) []string {
 	if len(command) == 0 {
 		return command
 	}
-	wrapped := []string{"landrun", "--ro", appDir, "--rw", filepath.Join(appDir, "data")}
+	wrapped := []string{"landrun", "--rox", "/bin,/usr,/lib,/lib64,/proc,/sys/fs/cgroup", "--ro", "/etc", "--rw", "/dev"}
+	for _, env := range envs {
+		wrapped = append(wrapped, "--env", env)
+	}
+	if st, err := os.Stat(filepath.Join(appDir, "data")); err == nil && st.IsDir() {
+		wrapped = append(wrapped, "--rw", filepath.Join(appDir, "data"))
+	}
+	wrapped = append(wrapped, "--rox", appDir)
 	if transport.Kind == "tcp" && transport.Port != "" {
 		wrapped = append(wrapped, "--bind-tcp", transport.Port)
 	}
-	wrapped = append(wrapped, "--")
 	wrapped = append(wrapped, command...)
 	return wrapped
 }
