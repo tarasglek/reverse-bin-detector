@@ -51,7 +51,15 @@ type ResolvedApp struct {
 	EnvOverrides     map[string]string
 }
 
+type Options struct {
+	NoRuntimeSandbox bool
+}
+
 func ResolveApp(ctx context.Context, appDir string, env map[string]string) (ResolvedApp, error) {
+	return ResolveAppWithOptions(ctx, appDir, env, Options{NoRuntimeSandbox: true})
+}
+
+func ResolveAppWithOptions(ctx context.Context, appDir string, env map[string]string, opts Options) (ResolvedApp, error) {
 	cfg, err := LoadEnvAppConfig(env)
 	if err != nil {
 		return ResolvedApp{}, err
@@ -86,6 +94,9 @@ func ResolveApp(ctx context.Context, appDir string, env map[string]string) (Reso
 		}
 		if out.Executable != nil {
 			resolved.Executable = *out.Executable
+		}
+		if !opts.NoRuntimeSandbox {
+			resolved.Executable = wrapRuntimeSandbox(resolved.Executable, appDir, transport)
 		}
 		return resolved, nil
 	}
@@ -253,6 +264,19 @@ func parseListen(listen string) (host string, port string, err error) {
 		return "", "", fmt.Errorf("Invalid LISTEN port")
 	}
 	return host, port, nil
+}
+
+func wrapRuntimeSandbox(command []string, appDir string, transport Transport) []string {
+	if len(command) == 0 {
+		return command
+	}
+	wrapped := []string{"landrun", "--ro", appDir, "--rw", filepath.Join(appDir, "data")}
+	if transport.Kind == "tcp" && transport.Port != "" {
+		wrapped = append(wrapped, "--bind-tcp", transport.Port)
+	}
+	wrapped = append(wrapped, "--")
+	wrapped = append(wrapped, command...)
+	return wrapped
 }
 
 func buildAppEnvs(appDir string, appEnv map[string]string, overrides map[string]string, providerName string) []string {

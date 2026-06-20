@@ -19,6 +19,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("reverse-bin-detector", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	allowUnsafeNoLandlock := fs.Bool("allow-unsafe-no-landlock", false, "disable detection Landlock sandbox")
+	noRuntimeSandbox := fs.Bool("no-runtime-sandbox", false, "emit backend command without runtime sandbox wrapper")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -41,7 +42,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	resolved, err := ResolveApp(ctx, appDir, env)
+	resolved, err := ResolveAppWithOptions(ctx, appDir, env, Options{NoRuntimeSandbox: *noRuntimeSandbox})
 	if err != nil {
 		return err
 	}
