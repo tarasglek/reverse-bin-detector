@@ -3,6 +3,7 @@ package detector
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -172,12 +173,18 @@ func resolveTransport(appDir string, cfg EnvAppConfig, providerName string) (Tra
 		path := filepath.Join(appDir, *cfg.SocketPath)
 		return Transport{Kind: "unix", SocketPath: path, ReverseProxyTo: "unix/" + path}, overrides, nil
 	}
+	if !hasTCPConfig(cfg) && providerName == "python" {
+		path := filepath.Join(appDir, "data", "reverse-bin.sock")
+		overrides[KeySocketPath] = filepath.Join("data", "reverse-bin.sock")
+		return Transport{Kind: "unix", SocketPath: path, ReverseProxyTo: "unix/" + path}, overrides, nil
+	}
 
 	host := "127.0.0.1"
 	if cfg.ReverseBinHost != nil && *cfg.ReverseBinHost != "" {
 		host = *cfg.ReverseBinHost
 	}
 	port := ""
+	allocated := false
 	if cfg.Listen != nil {
 		listenHost, listenPort, err := parseListen(*cfg.Listen)
 		if err != nil {
@@ -188,7 +195,12 @@ func resolveTransport(appDir string, cfg EnvAppConfig, providerName string) (Tra
 		port = *cfg.ReverseBinPort
 	}
 	if port == "" {
-		port = "8080"
+		freePort, err := allocateFreeTCPPort(host)
+		if err != nil {
+			return Transport{}, nil, err
+		}
+		port = freePort
+		allocated = true
 	}
 	listen := host + ":" + port
 	if cfg.Listen != nil && *cfg.Listen == "" {
@@ -198,7 +210,21 @@ func resolveTransport(appDir string, cfg EnvAppConfig, providerName string) (Tra
 		overrides[KeyReverseBinHost] = host
 		overrides[KeyReverseBinPort] = port
 	}
+	_ = allocated
 	return Transport{Kind: "tcp", Host: host, Port: port, Listen: listen, ReverseProxyTo: listen}, overrides, nil
+}
+
+func allocateFreeTCPPort(host string) (string, error) {
+	ln, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
+	if err != nil {
+		return "", fmt.Errorf("allocate free TCP port: %w", err)
+	}
+	defer ln.Close()
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		return "", fmt.Errorf("parse allocated TCP port: %w", err)
+	}
+	return port, nil
 }
 
 func parseListen(listen string) (host string, port string, err error) {
