@@ -1,6 +1,9 @@
 package sandbox
 
-import "path/filepath"
+import (
+	"path/filepath"
+	"strings"
+)
 
 // Policy is a small, portable vocabulary for filesystem/network sandboxing.
 // Future runtime backends can map this to NetBSD pledge/unveil, Linux
@@ -31,8 +34,24 @@ func SOPSReadOnlyPaths(env map[string]string) []string {
 	return nil
 }
 
+func PATHReadOnlyPaths(env map[string]string) []string {
+	pathEnv := env["PATH"]
+	if pathEnv == "" {
+		return nil
+	}
+	parts := strings.Split(pathEnv, string(filepath.ListSeparator))
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
 func DetectionPolicy(appDir string, env map[string]string) Policy {
 	ro := append([]string{AppReadOnlyPath(appDir)}, SystemReadOnlyPaths()...)
+	ro = append(ro, PATHReadOnlyPaths(env)...)
 	ro = append(ro, SOPSReadOnlyPaths(env)...)
 	return Policy{
 		ReadOnly:       ro,
