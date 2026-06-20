@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 
 	"github.com/tarasglek/caddy-reverse-bin/detectorschema"
@@ -72,8 +73,10 @@ func ResolveApp(ctx context.Context, appDir string, env map[string]string) (Reso
 		if err != nil {
 			return ResolvedApp{}, err
 		}
+		envs := buildAppEnvs(appDir, env, overrides, provider.Name())
 		resolved := ResolvedApp{
 			WorkingDirectory: appDir,
+			Envs:             envs,
 			ReverseProxyTo:   stringValue(out.ReverseProxyTo),
 			HealthMethod:     cfg.HealthMethod,
 			HealthPath:       cfg.HealthPath,
@@ -249,6 +252,41 @@ func parseListen(listen string) (host string, port string, err error) {
 		return "", "", fmt.Errorf("Invalid LISTEN port")
 	}
 	return host, port, nil
+}
+
+func buildAppEnvs(appDir string, appEnv map[string]string, overrides map[string]string, providerName string) []string {
+	merged := make(map[string]string, len(appEnv)+len(overrides)+3)
+	for key, value := range appEnv {
+		merged[key] = value
+	}
+	for key, value := range overrides {
+		merged[key] = value
+	}
+	if _, ok := merged["PATH"]; !ok {
+		if path := os.Getenv("PATH"); path != "" {
+			merged["PATH"] = path
+		}
+	}
+	dataDir := filepath.Join(appDir, "data")
+	if _, ok := merged["HOME"]; !ok {
+		if st, err := os.Stat(dataDir); err == nil && st.IsDir() {
+			merged["HOME"] = dataDir
+		}
+	}
+	if providerName == "deno" {
+		merged["DENO_NO_UPDATE_CHECK"] = "1"
+	}
+
+	keys := make([]string, 0, len(merged))
+	for key := range merged {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	envs := make([]string, 0, len(keys))
+	for _, key := range keys {
+		envs = append(envs, key+"="+merged[key])
+	}
+	return envs
 }
 
 func stringValue(ptr *string) string {
