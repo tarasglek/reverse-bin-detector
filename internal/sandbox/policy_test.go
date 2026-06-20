@@ -8,6 +8,7 @@ import (
 func TestDetectionPolicy(t *testing.T) {
 	p := DetectionPolicy("/apps/demo", map[string]string{"SOPS_AGE_KEY_FILE": "/keys/age.txt"})
 	assertContains(t, p.ReadOnly, "/apps/demo")
+	assertContains(t, p.ReadOnly, "/dev/null")
 	assertContains(t, p.ReadOnly, "/usr")
 	assertContains(t, p.ReadOnly, "/keys/age.txt")
 	if len(p.ReadWrite) != 0 {

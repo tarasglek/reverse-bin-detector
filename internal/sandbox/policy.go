@@ -50,7 +50,7 @@ func PATHReadOnlyPaths(env map[string]string) []string {
 }
 
 func DetectionPolicy(appDir string, env map[string]string) Policy {
-	ro := append([]string{AppReadOnlyPath(appDir)}, SystemReadOnlyPaths()...)
+	ro := append([]string{AppReadOnlyPath(appDir), "/dev/null"}, SystemReadOnlyPaths()...)
 	ro = append(ro, PATHReadOnlyPaths(env)...)
 	ro = append(ro, SOPSReadOnlyPaths(env)...)
 	return Policy{
