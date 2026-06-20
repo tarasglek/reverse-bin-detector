@@ -1,0 +1,62 @@
+---
+name: Lint GitHub Actions
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - ".github/dependabot.yml"
+      - ".github/workflows/**.yml"
+      - ".github/workflows/**.yaml"
+  pull_request:
+    branches: [main, master]
+    paths:
+      - ".github/dependabot.yml"
+      - ".github/workflows/**.yml"
+      - ".github/workflows/**.yaml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
+
+permissions:
+  contents: read
+
+jobs:
+  lintGitHubActionsWithActionLint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7.0.0
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .github
+
+      - name: Lint GitHub Actions
+        uses: reviewdog/action-actionlint@6fb7acc99f4a1008869fa8a0f09cfca740837d9d
+        with:
+          actionlint_flags: -shellcheck=
+
+      - name: Check GitHub Actions with actionlint
+        run: find .github/workflows -type f -print0 | xargs -0 -I % sh -c 'docker run --init --rm --network none -v "$PWD":/work:ro rhysd/actionlint:latest -shellcheck= /work/%'
+        shell: bash
+
+  lintGitHubActionsForSecurity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7.0.0
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .github
+
+      - name: Run zizmor on GitHub Actions
+        run: docker run --rm --network none -v "$PWD":/work:ro ghcr.io/woodruffw/zizmor:latest --offline --no-exit-codes /work/.github/workflows

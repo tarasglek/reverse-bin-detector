@@ -20,7 +20,12 @@ func Run(ctx context.Context, args []string, stdout io.Writer) error {
 	fs.SetOutput(io.Discard)
 	allowUnsafeNoLandlock := fs.Bool("allow-unsafe-no-landlock", false, "disable detection Landlock sandbox")
 	noRuntimeSandbox := fs.Bool("no-runtime-sandbox", false, "emit backend command without runtime sandbox wrapper")
+	showVersion := fs.Bool("version", false, "print version and exit")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *showVersion {
+		_, err := fmt.Fprintf(stdout, "%s %s %s\n", Version, Commit, BuildDate)
 		return err
 	}
 	if fs.NArg() != 1 {

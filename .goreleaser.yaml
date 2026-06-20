@@ -1,0 +1,45 @@
+version: 2
+
+project_name: reverse-bin-detector
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: reverse-bin-detector
+    main: ./cmd/reverse-bin-detector
+    binary: reverse-bin-detector
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - >-
+        -s -w
+        -X github.com/tarasglek/reverse-bin-detector/internal/detector.Version={{ .Version }}
+        -X github.com/tarasglek/reverse-bin-detector/internal/detector.Commit={{ .Commit }}
+        -X github.com/tarasglek/reverse-bin-detector/internal/detector.BuildDate={{ .Date }}
+
+archives:
+  - id: binaries
+    ids:
+      - reverse-bin-detector
+    formats:
+      - binary
+    name_template: >-
+      {{ .ProjectName }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  github:
+    owner: tarasglek
+    name: reverse-bin-detector
+
+changelog:
+  use: github-native
