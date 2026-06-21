@@ -41,7 +41,7 @@ func TestResolveAppBehavior(t *testing.T) {
 			env:       map[string]string{"REVERSE_BIN_PORT": "8080"},
 			wantCmd:   []string{"deno", "serve", "--watch", "--allow-all", "--host", "127.0.0.1", "--port", "8080", "main.ts"},
 			wantProxy: "127.0.0.1:8080",
-			wantEnv:   map[string]string{"DENO_NO_UPDATE_CHECK": "1"},
+			wantEnv:   map[string]string{"DENO_NO_UPDATE_CHECK": "1", "TMPDIR": "data"},
 		},
 		{
 			name:      "python executable defaults to unix socket",

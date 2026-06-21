@@ -468,6 +468,9 @@ func buildAppEnvs(appDir string, appEnv map[string]string, overrides map[string]
 			merged["HOME"] = dataDir
 		}
 	}
+	if _, ok := merged["TMPDIR"]; !ok {
+		merged["TMPDIR"] = "data"
+	}
 	if kind == denoApp {
 		merged["DENO_NO_UPDATE_CHECK"] = "1"
 	}
