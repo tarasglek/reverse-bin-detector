@@ -285,7 +285,7 @@ func ResolveAppWithRuntimeSandbox(ctx context.Context, appDir string, env map[st
 	}
 	envs := buildAppEnvs(appDir, env, overrides, app.kind)
 	if runtimeSandbox {
-		cmd = wrapRuntimeSandbox(cmd, appDir, tr, envs, app.kind)
+		cmd = wrapPIDNamespace(wrapRuntimeSandbox(cmd, appDir, tr, envs, app.kind))
 	}
 	return schemaOutput(cmd, appDir, envs, tr.proxy, cfg), nil
 }
@@ -430,6 +430,11 @@ func parseListen(listen string) (string, string, error) {
 		return "", "", fmt.Errorf("Invalid LISTEN port")
 	}
 	return host, port, nil
+}
+
+func wrapPIDNamespace(command []string) []string {
+	wrapped := []string{"unshare", "--map-current-user", "--pid", "--fork", "--mount-proc", "--ipc", "--uts", "--kill-child", "--"}
+	return append(wrapped, command...)
 }
 
 func wrapRuntimeSandbox(command []string, appDir string, tr transport, envs []string, kind appKind) []string {

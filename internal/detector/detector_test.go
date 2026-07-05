@@ -133,8 +133,12 @@ func TestResolveAppRuntimeSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveAppWithRuntimeSandbox: %v", err)
 	}
+	wantPrefix := []string{"unshare", "--map-current-user", "--pid", "--fork", "--mount-proc", "--ipc", "--uts", "--kill-child", "--", "landrun"}
+	if len(*resolved.Executable) < len(wantPrefix) || !reflect.DeepEqual((*resolved.Executable)[:len(wantPrefix)], wantPrefix) {
+		t.Fatalf("wrapped command prefix = %#v, want %#v", (*resolved.Executable)[:min(len(*resolved.Executable), len(wantPrefix))], wantPrefix)
+	}
 	cmd := strings.Join(*resolved.Executable, " ")
-	for _, want := range []string{"landrun", "--env DENO_NO_UPDATE_CHECK=1", "--rox " + appDir, "--unrestricted-network", "deno serve"} {
+	for _, want := range []string{"--env DENO_NO_UPDATE_CHECK=1", "--rox " + appDir, "--unrestricted-network", "deno serve"} {
 		if !strings.Contains(cmd, want) {
 			t.Fatalf("wrapped command %q missing %q", cmd, want)
 		}
