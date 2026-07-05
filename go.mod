@@ -1,6 +1,6 @@
 module github.com/tarasglek/reverse-bin-detector
 
-go 1.24.4
+go 1.25.10
 
 require (
 	github.com/landlock-lsm/go-landlock v0.9.0
