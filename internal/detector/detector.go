@@ -467,7 +467,7 @@ func wrapRuntimeSandbox(command []string, appDir string, tr transport, envs []st
 	}
 	wrapped = append(wrapped, "--rox", appDir)
 	if kind != staticApp {
-		wrapped = append(wrapped, "--unrestricted-network")
+		wrapped = append(wrapped, "--ro", "/sys", "--unrestricted-network")
 	}
 	return append(wrapped, command...)
 }

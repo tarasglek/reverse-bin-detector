@@ -200,6 +200,26 @@ func TestResolveStaticAppRuntimeSandboxUsesOnlySocketDirectory(t *testing.T) {
 	if strings.Contains(cmd, "--rw "+filepath.Join(appDir, "data")) {
 		t.Fatalf("static sandbox command grants app data write access: %q", cmd)
 	}
+	if hasOptionValue(*resolved.Executable, "--ro", "/sys") || hasOptionValue(*resolved.Executable, "--rw", "/sys") {
+		t.Fatalf("static sandbox command grants sysfs access: %q", cmd)
+	}
+}
+
+func TestExecutableAppRuntimeSandboxGrantsReadOnlySysfsAccess(t *testing.T) {
+	appDir := makeApp(t, nil)
+	resolved, err := ResolveAppWithRuntimeSandbox(context.Background(), appDir, map[string]string{
+		"REVERSE_BIN_COMMAND": "server",
+		"REVERSE_BIN_PORT":    "7777",
+	}, true)
+	if err != nil {
+		t.Fatalf("ResolveAppWithRuntimeSandbox: %v", err)
+	}
+	if !hasOptionValue(*resolved.Executable, "--ro", "/sys") {
+		t.Fatalf("executable sandbox command missing read-only /sys: %q", *resolved.Executable)
+	}
+	if hasOptionValue(*resolved.Executable, "--rw", "/sys") {
+		t.Fatalf("executable sandbox command grants writable /sys: %q", *resolved.Executable)
+	}
 }
 
 func TestExecutableAppRuntimeSandboxesUseUnrestrictedNetwork(t *testing.T) {
@@ -284,6 +304,15 @@ func makeApp(t *testing.T, files map[string]testFile) string {
 		}
 	}
 	return appDir
+}
+
+func hasOptionValue(command []string, option, value string) bool {
+	for i := 0; i+1 < len(command); i++ {
+		if command[i] == option && command[i+1] == value {
+			return true
+		}
+	}
+	return false
 }
 
 func envMap(envs []string) map[string]string {
