@@ -466,10 +466,8 @@ func wrapRuntimeSandbox(command []string, appDir string, tr transport, envs []st
 		wrapped = append(wrapped, "--rw", tr.socketDir)
 	}
 	wrapped = append(wrapped, "--rox", appDir)
-	if kind == denoApp {
+	if kind != staticApp {
 		wrapped = append(wrapped, "--unrestricted-network")
-	} else if tr.kind == "tcp" && tr.port != "" {
-		wrapped = append(wrapped, "--bind-tcp", tr.port)
 	}
 	return append(wrapped, command...)
 }

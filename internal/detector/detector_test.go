@@ -188,6 +188,9 @@ func TestResolveStaticAppRuntimeSandboxUsesOnlySocketDirectory(t *testing.T) {
 		t.Fatalf("ResolveAppWithRuntimeSandbox: %v", err)
 	}
 	cmd := strings.Join(*resolved.Executable, " ")
+	if strings.Contains(cmd, "--unrestricted-network") {
+		t.Fatalf("static sandbox command contains --unrestricted-network: %q", cmd)
+	}
 	if strings.Contains(cmd, "--bind-tcp") {
 		t.Fatalf("static sandbox command contains --bind-tcp: %q", cmd)
 	}
@@ -196,6 +199,45 @@ func TestResolveStaticAppRuntimeSandboxUsesOnlySocketDirectory(t *testing.T) {
 	}
 	if strings.Contains(cmd, "--rw "+filepath.Join(appDir, "data")) {
 		t.Fatalf("static sandbox command grants app data write access: %q", cmd)
+	}
+}
+
+func TestExecutableAppRuntimeSandboxesUseUnrestrictedNetwork(t *testing.T) {
+	tests := []struct {
+		name  string
+		files map[string]testFile
+		env   map[string]string
+	}{
+		{
+			name: "command",
+			env:  map[string]string{"REVERSE_BIN_COMMAND": "server", "REVERSE_BIN_PORT": "7777"},
+		},
+		{
+			name:  "deno",
+			files: map[string]testFile{"main.ts": {body: "console.log('hello')\n"}},
+			env:   map[string]string{"REVERSE_BIN_PORT": "7777"},
+		},
+		{
+			name:  "python",
+			files: map[string]testFile{"main.py": {body: "#!/usr/bin/env python3\n", mode: 0o755}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			appDir := makeApp(t, tt.files)
+			resolved, err := ResolveAppWithRuntimeSandbox(context.Background(), appDir, tt.env, true)
+			if err != nil {
+				t.Fatalf("ResolveAppWithRuntimeSandbox: %v", err)
+			}
+			cmd := strings.Join(*resolved.Executable, " ")
+			if !strings.Contains(cmd, "--unrestricted-network") {
+				t.Fatalf("executable sandbox command missing --unrestricted-network: %q", cmd)
+			}
+			if strings.Contains(cmd, "--bind-tcp") {
+				t.Fatalf("executable sandbox command contains --bind-tcp: %q", cmd)
+			}
+		})
 	}
 }
 
