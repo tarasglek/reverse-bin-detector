@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/tarasglek/caddy-reverse-bin/detectorschema"
 )
 
 type testFile struct {
@@ -18,15 +20,16 @@ type testFile struct {
 func TestResolveAppBehavior(t *testing.T) {
 	t.Setenv("PATH", "/test/bin")
 	tests := []struct {
-		name       string
-		files      map[string]testFile
-		env        map[string]string
-		wantCmd    []string
-		wantProxy  string
-		wantEnv    map[string]string
-		wantRoot   string
-		wantErr    string
-		localProxy bool
+		name           string
+		files          map[string]testFile
+		env            map[string]string
+		wantCmd        []string
+		wantProxy      string
+		wantEnv        map[string]string
+		wantRoot       string
+		wantErr        string
+		localProxy     bool
+		wantStaticRoot string
 	}{
 		{
 			name:      "explicit command wins",
@@ -51,18 +54,56 @@ func TestResolveAppBehavior(t *testing.T) {
 			wantEnv:   map[string]string{"SOCKET_PATH": filepath.Join("data", "reverse-bin.sock")},
 		},
 		{
-			name:      "static root",
-			files:     map[string]testFile{"index.html": {body: "<h1>static</h1>\n"}},
-			env:       map[string]string{"REVERSE_BIN_PORT": "8080"},
-			wantCmd:   []string{"reverse-bin-caddy", "file-server", "--listen", "127.0.0.1:8080", "--root", "."},
-			wantProxy: "127.0.0.1:8080",
+			name:           "static root defaults to managed unix socket",
+			files:          map[string]testFile{"index.html": {body: "<h1>static</h1>\n"}},
+			wantStaticRoot: ".",
 		},
 		{
-			name:      "static dist",
-			files:     map[string]testFile{"dist/index.html": {body: "<h1>static</h1>\n"}},
-			env:       map[string]string{"REVERSE_BIN_PORT": "8080"},
-			wantCmd:   []string{"reverse-bin-caddy", "file-server", "--listen", "127.0.0.1:8080", "--root", "dist"},
-			wantProxy: "127.0.0.1:8080",
+			name:           "static dist defaults to managed unix socket",
+			files:          map[string]testFile{"dist/index.html": {body: "<h1>static</h1>\n"}},
+			wantStaticRoot: "dist",
+		},
+		{
+			name:    "static socket config rejected",
+			files:   map[string]testFile{"index.html": {body: "<h1>static</h1>\n"}},
+			env:     map[string]string{"SOCKET_PATH": "data/static.sock"},
+			wantErr: "static file server only supports reverse-bin-managed Unix sockets",
+		},
+		{
+			name:    "static port config rejected",
+			files:   map[string]testFile{"index.html": {body: "<h1>static</h1>\n"}},
+			env:     map[string]string{"REVERSE_BIN_PORT": "8080"},
+			wantErr: "static file server only supports reverse-bin-managed Unix sockets",
+		},
+		{
+			name:    "static listen config rejected",
+			files:   map[string]testFile{"index.html": {body: "<h1>static</h1>\n"}},
+			env:     map[string]string{"LISTEN": "127.0.0.1:8080"},
+			wantErr: "static file server only supports reverse-bin-managed Unix sockets",
+		},
+		{
+			name:    "static host config rejected",
+			files:   map[string]testFile{"index.html": {body: "<h1>static</h1>\n"}},
+			env:     map[string]string{"REVERSE_BIN_HOST": "127.0.0.1"},
+			wantErr: "static file server only supports reverse-bin-managed Unix sockets",
+		},
+		{
+			name:    "static blank port config rejected",
+			files:   map[string]testFile{"index.html": {body: "<h1>static</h1>\n"}},
+			env:     map[string]string{"REVERSE_BIN_PORT": ""},
+			wantErr: "static file server only supports reverse-bin-managed Unix sockets",
+		},
+		{
+			name:    "static blank listen config rejected",
+			files:   map[string]testFile{"index.html": {body: "<h1>static</h1>\n"}},
+			env:     map[string]string{"LISTEN": ""},
+			wantErr: "static file server only supports reverse-bin-managed Unix sockets",
+		},
+		{
+			name:    "static blank host config rejected",
+			files:   map[string]testFile{"index.html": {body: "<h1>static</h1>\n"}},
+			env:     map[string]string{"REVERSE_BIN_HOST": ""},
+			wantErr: "static file server only supports reverse-bin-managed Unix sockets",
 		},
 		{
 			name:    "non executable python is ignored",
@@ -114,6 +155,9 @@ func TestResolveAppBehavior(t *testing.T) {
 			if tt.localProxy {
 				assertLocalTCP(t, *resolved.ReverseProxyTo)
 			}
+			if tt.wantStaticRoot != "" {
+				assertStaticUnix(t, resolved, tt.wantStaticRoot)
+			}
 			envs := envMap(*resolved.Envs)
 			if got := envs["PATH"]; got != "/test/bin" {
 				t.Fatalf("PATH = %q, want /test/bin", got)
@@ -124,6 +168,34 @@ func TestResolveAppBehavior(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCommandForRejectsStaticTCPTransport(t *testing.T) {
+	_, err := commandFor(app{kind: staticApp, root: "."}, transport{kind: "tcp", listen: "127.0.0.1:8080"})
+	if err == nil || !strings.Contains(err.Error(), "only supports Unix sockets") {
+		t.Fatalf("commandFor error = %v, want static Unix-only error", err)
+	}
+}
+
+func TestResolveStaticAppRuntimeSandboxUsesOnlySocketDirectory(t *testing.T) {
+	appDir := makeApp(t, map[string]testFile{
+		"index.html": {body: "<h1>static</h1>\n"},
+		"data/.keep": {body: ""},
+	})
+	resolved, err := ResolveAppWithRuntimeSandbox(context.Background(), appDir, nil, true)
+	if err != nil {
+		t.Fatalf("ResolveAppWithRuntimeSandbox: %v", err)
+	}
+	cmd := strings.Join(*resolved.Executable, " ")
+	if strings.Contains(cmd, "--bind-tcp") {
+		t.Fatalf("static sandbox command contains --bind-tcp: %q", cmd)
+	}
+	if !strings.Contains(cmd, "--rw /run/reverse-bin/static-apps/app-") {
+		t.Fatalf("static sandbox command missing runtime socket dir: %q", cmd)
+	}
+	if strings.Contains(cmd, "--rw "+filepath.Join(appDir, "data")) {
+		t.Fatalf("static sandbox command grants app data write access: %q", cmd)
 	}
 }
 
@@ -181,6 +253,19 @@ func envMap(envs []string) map[string]string {
 		}
 	}
 	return out
+}
+
+func assertStaticUnix(t *testing.T, resolved detectorschema.DetectorOutput, root string) {
+	t.Helper()
+	proxy := *resolved.ReverseProxyTo
+	if !strings.HasPrefix(proxy, "unix//run/reverse-bin/static-apps/app-") || !strings.HasSuffix(proxy, "/reverse-bin.sock") {
+		t.Fatalf("ReverseProxyTo = %q, want managed static Unix socket", proxy)
+	}
+	listen := "unix//" + strings.TrimPrefix(proxy, "unix/")
+	want := []string{"reverse-bin-caddy", "file-server", "--listen", listen, "--root", root}
+	if !reflect.DeepEqual(*resolved.Executable, want) {
+		t.Fatalf("Executable = %#v, want %#v", *resolved.Executable, want)
+	}
 }
 
 func assertLocalTCP(t *testing.T, addr string) {

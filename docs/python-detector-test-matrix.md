@@ -86,7 +86,7 @@ Python source tests:
 Go target group:
 - Transport resolver tests.
 - Unix socket paths must be relative and resolved under app dir.
-- Deno/static TCP-only providers reject socket transport.
+- Deno remains TCP-only. Static apps always use reverse-bin-managed Unix socket transport through Caddy file-server and reject TCP listener config.
 
 ## App entrypoint detection order
 

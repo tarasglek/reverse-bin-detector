@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -254,11 +256,12 @@ type app struct {
 }
 
 type transport struct {
-	kind   string
-	proxy  string
-	host   string
-	port   string
-	listen string
+	kind      string
+	proxy     string
+	host      string
+	port      string
+	listen    string
+	socketDir string
 }
 
 func ResolveApp(ctx context.Context, appDir string, env map[string]string) (detectorschema.DetectorOutput, error) {
@@ -333,10 +336,11 @@ func commandFor(a app, tr transport) ([]string, error) {
 	case pythonApp:
 		return []string{"./main.py"}, nil
 	case staticApp:
-		if tr.kind == "unix" {
-			return nil, fmt.Errorf("static file server does not support SOCKET_PATH")
+		if tr.kind != "unix" {
+			return nil, fmt.Errorf("static file server only supports Unix sockets")
 		}
-		return []string{"reverse-bin-caddy", "file-server", "--listen", tr.listen, "--root", a.root}, nil
+		path := strings.TrimPrefix(tr.proxy, "unix/")
+		return []string{"reverse-bin-caddy", "file-server", "--listen", "unix//" + path, "--root", a.root}, nil
 	default:
 		return nil, fmt.Errorf("unknown app kind %q", a.kind)
 	}
@@ -354,6 +358,14 @@ func isFile(appDir, name string, executable bool) (bool, error) {
 }
 
 func resolveTransport(appDir string, cfg EnvAppConfig, kind appKind) (transport, map[string]string, error) {
+	if kind == staticApp {
+		if cfg.SocketPath != nil || hasTCPConfig(cfg) {
+			return transport{}, nil, fmt.Errorf("static file server only supports reverse-bin-managed Unix sockets")
+		}
+		dir := staticRuntimeDir(appDir)
+		path := filepath.Join(dir, "reverse-bin.sock")
+		return transport{kind: "unix", proxy: "unix/" + path, socketDir: dir}, map[string]string{}, nil
+	}
 	if cfg.SocketPath != nil {
 		if filepath.IsAbs(*cfg.SocketPath) {
 			return transport{}, nil, fmt.Errorf("Unix socket path must be relative")
@@ -366,6 +378,11 @@ func resolveTransport(appDir string, cfg EnvAppConfig, kind appKind) (transport,
 		return transport{kind: "unix", proxy: "unix/" + path}, map[string]string{KeySocketPath: filepath.Join("data", "reverse-bin.sock")}, nil
 	}
 	return tcpTransport(cfg)
+}
+
+func staticRuntimeDir(appDir string) string {
+	sum := sha256.Sum256([]byte(filepath.Clean(appDir)))
+	return filepath.Join("/run/reverse-bin/static-apps", "app-"+hex.EncodeToString(sum[:])[:16])
 }
 
 func tcpTransport(cfg EnvAppConfig) (transport, map[string]string, error) {
@@ -442,8 +459,11 @@ func wrapRuntimeSandbox(command []string, appDir string, tr transport, envs []st
 	for _, env := range envs {
 		wrapped = append(wrapped, "--env", env)
 	}
-	if st, err := os.Stat(filepath.Join(appDir, "data")); err == nil && st.IsDir() {
+	if st, err := os.Stat(filepath.Join(appDir, "data")); kind != staticApp && err == nil && st.IsDir() {
 		wrapped = append(wrapped, "--rw", filepath.Join(appDir, "data"))
+	}
+	if tr.socketDir != "" {
+		wrapped = append(wrapped, "--rw", tr.socketDir)
 	}
 	wrapped = append(wrapped, "--rox", appDir)
 	if kind == denoApp {

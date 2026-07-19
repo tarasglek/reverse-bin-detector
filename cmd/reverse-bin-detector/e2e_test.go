@@ -27,20 +27,18 @@ func TestCLIPythonSocketAppOutput(t *testing.T) {
 	}
 }
 
-func TestCLIStaticTCPAppOutput(t *testing.T) {
+func TestCLIStaticUnixAppOutput(t *testing.T) {
 	appDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(appDir, "index.html"), []byte("<h1>static</h1>\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(appDir, ".env"), []byte("REVERSE_BIN_PORT=9999\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
 	payload := runDetectorOK(t, appDir)
-	if got := strings.Join(*payload.Executable, " "); !strings.Contains(got, "reverse-bin-caddy file-server") {
+	got := strings.Join(*payload.Executable, " ")
+	if !strings.Contains(got, "reverse-bin-caddy file-server") || !strings.Contains(got, "--listen unix///run/reverse-bin/static-apps/app-") {
 		t.Fatalf("Executable = %#v", *payload.Executable)
 	}
-	if *payload.ReverseProxyTo != "127.0.0.1:9999" {
+	if !strings.HasPrefix(*payload.ReverseProxyTo, "unix//run/reverse-bin/static-apps/app-") || !strings.HasSuffix(*payload.ReverseProxyTo, "/reverse-bin.sock") {
 		t.Fatalf("ReverseProxyTo = %q", *payload.ReverseProxyTo)
 	}
 }
