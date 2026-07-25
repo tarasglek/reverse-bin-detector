@@ -35,7 +35,7 @@ jobs:
             .github
 
       - name: Lint GitHub Actions
-        uses: reviewdog/action-actionlint@6fb7acc99f4a1008869fa8a0f09cfca740837d9d
+        uses: reviewdog/action-actionlint@50842263c20a7c46bd0065b9e624d3c569db061e
         with:
           actionlint_flags: -shellcheck=
 
