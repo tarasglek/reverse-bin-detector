@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Add `--sandbox-exec APP_DIR -- COMMAND...` for one-off commands using exact detector-generated runtime environment and isolation.
+**Goal:** Add `--as-app APP_DIR -- COMMAND...` for one-off commands using exact detector-generated runtime environment and isolation.
 
 **Architecture:** Restricted child builds custom launch plan; unrestricted parent validates and executes it. Existing JSON mode stays unchanged.
 
@@ -19,7 +19,7 @@
 
 - [x] Task 2: Parse sandbox-exec CLI without changing JSON mode
   - Files: `internal/detector/detector.go`, `cmd/reverse-bin-detector/main_test.go`
-  - Test first: cover normal `APP_DIR`, `--sandbox-exec APP_DIR -- COMMAND...`, missing app, missing separator, and missing command.
+  - Test first: cover normal `APP_DIR`, `--as-app APP_DIR -- COMMAND...`, missing app, missing separator, and missing command.
   - Verify RED: focused CLI tests fail because flag is unknown.
   - Implement: strict argument parser preserving every command argument after `--`; update usage text.
   - Verify GREEN: `go test ./cmd/reverse-bin-detector ./internal/detector`.

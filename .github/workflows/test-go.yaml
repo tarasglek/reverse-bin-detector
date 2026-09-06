@@ -51,4 +51,13 @@ jobs:
           cache: true
 
       - name: Run full test suite
+        env:
+          # GitHub-hosted runners forbid user namespaces (unshare
+          # --map-current-user fails), so the --as-app runtime sandbox
+          # cannot be exercised here. RBD_NO_SANDBOX=1 explicitly opts into
+          # running the functional sandbox-exec tests without the isolation
+          # layer; the isolation assertions skip with an explicit message.
+          # Never silently: without this env, tests fail loudly when user
+          # namespaces are unavailable.
+          RBD_NO_SANDBOX: "1"
         run: make check

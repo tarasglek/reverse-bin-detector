@@ -57,10 +57,18 @@ func parseCLIArgs(args []string) (cliOptions, error) {
 	fs.BoolVar(&opts.allowUnsafeNoLandlock, "allow-unsafe-no-landlock", false, "disable detection Landlock sandbox")
 	fs.BoolVar(&opts.noRuntimeSandbox, "no-runtime-sandbox", false, "emit backend command without runtime sandbox wrapper")
 	fs.BoolVar(&opts.showVersion, "version", false, "print version and exit")
-	fs.BoolVar(&opts.sandboxExec, "sandbox-exec", false, "execute command with app runtime sandbox")
-	fs.BoolVar(&opts.sandboxExecPlan, "sandbox-exec-plan", false, "")
+	fs.BoolVar(&opts.sandboxExec, "as-app", false, "execute command with app runtime sandbox")
+	fs.BoolVar(&opts.sandboxExecPlan, "as-app-plan", false, "")
 	if err := fs.Parse(args); err != nil {
 		return cliOptions{}, err
+	}
+	// RBD_NO_SANDBOX=1 mirrors --allow-unsafe-no-landlock for --as-app: it
+	// runs the command directly (no unshare/landrun wrapper) and skips
+	// detection Landlock. Useful for CI hosts that forbid user namespaces.
+	// Explicit opt-in via environment, never silent degradation.
+	if os.Getenv("RBD_NO_SANDBOX") == "1" {
+		opts.allowUnsafeNoLandlock = true
+		opts.noRuntimeSandbox = true
 	}
 	if opts.showVersion {
 		return opts, nil
@@ -70,15 +78,15 @@ func parseCLIArgs(args []string) (cliOptions, error) {
 		return cliOptions{}, fmt.Errorf("sandbox exec modes cannot be combined")
 	}
 	if opts.sandboxExec || opts.sandboxExecPlan {
-		if len(rest) < 3 || rest[1] != "--" || rest[0] == "" || opts.noRuntimeSandbox {
-			return cliOptions{}, fmt.Errorf("usage: reverse-bin-detector --sandbox-exec APP_DIR -- COMMAND [ARGS...]")
+		if len(rest) < 3 || rest[1] != "--" || rest[0] == "" || (opts.noRuntimeSandbox && os.Getenv("RBD_NO_SANDBOX") != "1") {
+			return cliOptions{}, fmt.Errorf("usage: reverse-bin-detector --as-app APP_DIR -- COMMAND [ARGS...]")
 		}
 		opts.appDir = rest[0]
 		opts.command = append([]string(nil), rest[2:]...)
 		return opts, nil
 	}
 	if len(rest) != 1 {
-		return cliOptions{}, fmt.Errorf("usage: reverse-bin-detector [--allow-unsafe-no-landlock] APP_DIR\n       reverse-bin-detector --sandbox-exec APP_DIR -- COMMAND [ARGS...]")
+		return cliOptions{}, fmt.Errorf("usage: reverse-bin-detector [--allow-unsafe-no-landlock] APP_DIR\n       reverse-bin-detector --as-app APP_DIR -- COMMAND [ARGS...]")
 	}
 	opts.appDir = rest[0]
 	return opts, nil
@@ -139,14 +147,16 @@ func requestSandboxExecPlan(ctx context.Context, executable string, opts cliOpti
 	if opts.allowUnsafeNoLandlock {
 		args = append(args, "--allow-unsafe-no-landlock")
 	}
-	args = append(args, "--sandbox-exec-plan", opts.appDir, "--")
+	if opts.noRuntimeSandbox {
+		args = append(args, "--no-runtime-sandbox")
+	}
+	args = append(args, "--as-app-plan", opts.appDir, "--")
 	args = append(args, opts.command...)
 	cmd := exec.CommandContext(ctx, executable, args...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	cmd.Stderr = os.Stderr
 	output, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("generate sandbox exec plan: %w: %s", err, strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("generate sandbox exec plan: %w", err)
 	}
 	plan, err := detectorschema.Parse(output)
 	if err != nil {
@@ -168,7 +178,7 @@ func emitPlan(ctx context.Context, opts cliOptions, stdout io.Writer) error {
 	}
 	var out detectorschema.DetectorOutput
 	if opts.sandboxExecPlan {
-		out, err = ResolveAppWithCustomCommand(ctx, appDir, env, opts.command, true)
+		out, err = ResolveAppWithCustomCommand(ctx, appDir, env, opts.command, !opts.noRuntimeSandbox)
 	} else {
 		out, err = ResolveAppWithRuntimeSandbox(ctx, appDir, env, !opts.noRuntimeSandbox)
 	}
@@ -405,10 +415,30 @@ func resolveApp(ctx context.Context, appDir string, env map[string]string, custo
 		}
 	}
 	envs := buildAppEnvs(appDir, env, overrides, app.kind)
+	if customCommand != nil {
+		envs = defaultPlanHome(envs, appDir)
+	}
 	if runtimeSandbox {
 		cmd = wrapPIDNamespace(wrapRuntimeSandbox(cmd, appDir, tr, envs, app.kind))
 	}
 	return schemaOutput(cmd, appDir, envs, tr.proxy, cfg), nil
+}
+
+// defaultPlanHome guarantees HOME in the plan environment so interactive
+// shells cannot fall back to the caller's password-database home directory
+// and source its rc files. HOME is always the app data dir, matching
+// production; warn when data/ does not exist yet.
+func defaultPlanHome(envs []string, appDir string) []string {
+	for _, entry := range envs {
+		if strings.HasPrefix(entry, "HOME=") {
+			return envs
+		}
+	}
+	dataDir := filepath.Join(appDir, "data")
+	if _, err := os.Stat(dataDir); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %s does not exist; create it with mkdir -p %s (HOME points there anyway)\n", dataDir, dataDir)
+	}
+	return append(envs, "HOME="+dataDir)
 }
 
 func schemaOutput(cmd []string, appDir string, envs []string, proxy string, cfg EnvAppConfig) detectorschema.DetectorOutput {

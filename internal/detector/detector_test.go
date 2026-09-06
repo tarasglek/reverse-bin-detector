@@ -19,7 +19,7 @@ type testFile struct {
 }
 
 func TestParseCLISandboxExec(t *testing.T) {
-	got, err := parseCLIArgs([]string{"--sandbox-exec", "/apps/demo", "--", "tool", "two words", "--flag"})
+	got, err := parseCLIArgs([]string{"--as-app", "/apps/demo", "--", "tool", "two words", "--flag"})
 	if err != nil {
 		t.Fatalf("parseCLIArgs: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestRequestSandboxExecPlanReexecutesAndValidates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantArgs := "--allow-unsafe-no-landlock\n--sandbox-exec-plan\n" + appDir + "\n--\ntool\ntwo words\n"
+	wantArgs := "--allow-unsafe-no-landlock\n--as-app-plan\n" + appDir + "\n--\ntool\ntwo words\n"
 	if string(args) != wantArgs {
 		t.Fatalf("child args = %q, want %q", args, wantArgs)
 	}
@@ -91,6 +91,9 @@ func TestRequestSandboxExecPlanRejectsInvalidOutput(t *testing.T) {
 }
 
 func TestRunSandboxExecPlan(t *testing.T) {
+	// This test asserts the sandbox-wrapped plan format, so force sandbox
+	// mode even when RBD_NO_SANDBOX=1 is set by the caller/CI.
+	t.Setenv("RBD_NO_SANDBOX", "0")
 	t.Setenv("PATH", "/test/bin")
 	appDir := makeApp(t, map[string]testFile{
 		"main.ts": {body: "console.log('hello')\n"},
@@ -98,7 +101,7 @@ func TestRunSandboxExecPlan(t *testing.T) {
 	})
 	var stdout strings.Builder
 	err := Run(context.Background(), []string{
-		"--allow-unsafe-no-landlock", "--sandbox-exec-plan", appDir, "--", "deno", "test", "two words",
+		"--allow-unsafe-no-landlock", "--as-app-plan", appDir, "--", "deno", "test", "two words",
 	}, &stdout)
 	if err != nil {
 		t.Fatalf("Run sandbox exec plan: %v", err)
@@ -106,6 +109,13 @@ func TestRunSandboxExecPlan(t *testing.T) {
 	plan, err := detectorschema.Parse([]byte(stdout.String()))
 	if err != nil {
 		t.Fatalf("parse plan: %v", err)
+	}
+	wantHome := "--env HOME=" + filepath.Join(appDir, "data")
+	if !strings.Contains(strings.Join(*plan.Executable, " "), wantHome) {
+		t.Fatalf("executable missing %s: %#v", wantHome, *plan.Executable)
+	}
+	if got := envMap(*plan.Envs)["HOME"]; got != filepath.Join(appDir, "data") {
+		t.Fatalf("HOME env = %q, want %q", got, filepath.Join(appDir, "data"))
 	}
 	command := *plan.Executable
 	wantSuffix := []string{"deno", "test", "two words"}
@@ -129,10 +139,10 @@ func TestParseCLIJSONModeUnchanged(t *testing.T) {
 
 func TestParseCLISandboxExecRejectsInvalidShape(t *testing.T) {
 	for _, args := range [][]string{
-		{"--sandbox-exec"},
-		{"--sandbox-exec", "/apps/demo"},
-		{"--sandbox-exec", "/apps/demo", "tool"},
-		{"--sandbox-exec", "/apps/demo", "--"},
+		{"--as-app"},
+		{"--as-app", "/apps/demo"},
+		{"--as-app", "/apps/demo", "tool"},
+		{"--as-app", "/apps/demo", "--"},
 	} {
 		if _, err := parseCLIArgs(args); err == nil {
 			t.Fatalf("parseCLIArgs(%#v) succeeded, want error", args)

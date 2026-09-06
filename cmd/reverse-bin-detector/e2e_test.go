@@ -76,19 +76,46 @@ func sbAppDir(t *testing.T) string {
 	return appDir
 }
 
+// sandboxAvailable reports whether the --as-app runtime sandbox can run here.
+// It never degrades silently:
+//   - RBD_NO_SANDBOX=1 explicitly opts out (CI hosts that forbid user namespaces).
+//   - otherwise user namespaces must work, or the test fails loudly.
+func sandboxAvailable(t *testing.T) bool {
+	t.Helper()
+	if os.Getenv("RBD_NO_SANDBOX") == "1" {
+		return false
+	}
+	cmd := exec.Command("unshare", "--map-current-user", "true")
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("user namespaces unavailable and RBD_NO_SANDBOX is not set: %v", err)
+	}
+	return true
+}
+
+// requireSandboxIsolation skips the sandbox isolation assertions only when
+// RBD_NO_SANDBOX=1 (explicit opt-out). When sandboxing is expected but
+// unavailable, sandboxAvailable fails loudly instead of skipping.
+func requireSandboxIsolation(t *testing.T) {
+	t.Helper()
+	if !sandboxAvailable(t) {
+		t.Skip("RBD_NO_SANDBOX=1: sandbox isolation not asserted")
+	}
+}
+
 func TestSandboxExecWithEcho(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping sandbox exec test in short mode")
 	}
+	sandboxAvailable(t)
 	bin := requireSandboxExecBinary(t, t.TempDir())
 	appDir := sbAppDir(t)
 
-	cmd := exec.Command(bin, "--allow-unsafe-no-landlock", "--sandbox-exec", appDir, "--", "echo", "hello world")
+	cmd := exec.Command(bin, "--allow-unsafe-no-landlock", "--as-app", appDir, "--", "echo", "hello world")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		t.Fatalf("sandbox-exec failed: %v\nstderr: %s\nstdout: %s", err, stderr.String(), stdout.String())
+		t.Fatalf("as-app failed: %v\nstderr: %s\nstdout: %s", err, stderr.String(), stdout.String())
 	}
 	if got := strings.TrimSpace(stdout.String()); got != "hello world" {
 		t.Fatalf("stdout = %q, want %q", got, "hello world")
@@ -99,18 +126,19 @@ func TestSandboxExecExactEnv(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping sandbox exec test in short mode")
 	}
+	sandboxAvailable(t)
 	bin := requireSandboxExecBinary(t, t.TempDir())
 	appDir := sbAppDir(t)
 	if err := os.WriteFile(filepath.Join(appDir, ".env"), []byte("CUSTOM=secret\nREVERSE_BIN_PORT=7777\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(bin, "--allow-unsafe-no-landlock", "--sandbox-exec", appDir, "--", "sh", "-c", "echo $CUSTOM; echo $USER; echo $HOME")
+	cmd := exec.Command(bin, "--allow-unsafe-no-landlock", "--as-app", appDir, "--", "sh", "-c", "echo $CUSTOM; echo $USER; echo $HOME")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		t.Fatalf("sandbox-exec failed: %v\nstderr: %s\nstdout: %s", err, stderr.String(), stdout.String())
+		t.Fatalf("as-app failed: %v\nstderr: %s\nstdout: %s", err, stderr.String(), stdout.String())
 	}
 	lines := strings.Split(stdout.String(), "\n")
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
@@ -122,8 +150,11 @@ func TestSandboxExecExactEnv(t *testing.T) {
 	if lines[0] != "secret" {
 		t.Fatalf("CUSTOM = %q, want secret", lines[0])
 	}
-	if lines[1] != "" || lines[2] != "" {
-		t.Fatalf("env leaked: USER=%q HOME=%q", lines[1], lines[2])
+	if lines[1] != "" {
+		t.Fatalf("USER leaked: USER=%q", lines[1])
+	}
+	if lines[2] != filepath.Join(appDir, "data") {
+		t.Fatalf("HOME = %q, want %q (caller HOME=%q)", lines[2], filepath.Join(appDir, "data"), os.Getenv("HOME"))
 	}
 }
 
@@ -131,10 +162,11 @@ func TestSandboxExecExitCodePropagation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping sandbox exec test in short mode")
 	}
+	sandboxAvailable(t)
 	bin := requireSandboxExecBinary(t, t.TempDir())
 	appDir := sbAppDir(t)
 
-	cmd := exec.Command(bin, "--allow-unsafe-no-landlock", "--sandbox-exec", appDir, "--", "sh", "-c", "exit 42")
+	cmd := exec.Command(bin, "--allow-unsafe-no-landlock", "--as-app", appDir, "--", "sh", "-c", "exit 42")
 	if err := cmd.Run(); err == nil {
 		t.Fatal("expected exit error, got nil")
 	} else if exitErr, ok := err.(*exec.ExitError); ok {
@@ -150,15 +182,16 @@ func TestSandboxExecWorkingDirectory(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping sandbox exec test in short mode")
 	}
+	sandboxAvailable(t)
 	bin := requireSandboxExecBinary(t, t.TempDir())
 	appDir := sbAppDir(t)
 
-	cmd := exec.Command(bin, "--allow-unsafe-no-landlock", "--sandbox-exec", appDir, "--", "pwd")
+	cmd := exec.Command(bin, "--allow-unsafe-no-landlock", "--as-app", appDir, "--", "pwd")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		t.Fatalf("sandbox-exec failed: %v\nstderr: %s\nstdout: %s", err, stderr.String(), stdout.String())
+		t.Fatalf("as-app failed: %v\nstderr: %s\nstdout: %s", err, stderr.String(), stdout.String())
 	}
 	got := strings.TrimSpace(stdout.String())
 	if got != appDir {
@@ -170,11 +203,12 @@ func TestSandboxExecSourceReadOnly(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping sandbox exec test in short mode")
 	}
+	requireSandboxIsolation(t)
 	bin := requireSandboxExecBinary(t, t.TempDir())
 	appDir := sbAppDir(t)
 
 	// Source write should fail
-	cmd := exec.Command(bin, "--allow-unsafe-no-landlock", "--sandbox-exec", appDir, "--", "touch", filepath.Join(appDir, "newfile.txt"))
+	cmd := exec.Command(bin, "--allow-unsafe-no-landlock", "--as-app", appDir, "--", "touch", filepath.Join(appDir, "newfile.txt"))
 	if err := cmd.Run(); err == nil {
 		t.Fatal("expected source write to fail")
 	} else if exitErr, ok := err.(*exec.ExitError); ok {
@@ -188,13 +222,14 @@ func TestSandboxExecDataWritable(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping sandbox exec test in short mode")
 	}
+	requireSandboxIsolation(t)
 	bin := requireSandboxExecBinary(t, t.TempDir())
 	appDir := sbAppDir(t)
 	if err := os.MkdirAll(filepath.Join(appDir, "data"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(bin, "--allow-unsafe-no-landlock", "--sandbox-exec", appDir, "--", "touch", filepath.Join(appDir, "data", "wrote.txt"))
+	cmd := exec.Command(bin, "--allow-unsafe-no-landlock", "--as-app", appDir, "--", "touch", filepath.Join(appDir, "data", "wrote.txt"))
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -202,6 +237,33 @@ func TestSandboxExecDataWritable(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(appDir, "data", "wrote.txt")); os.IsNotExist(err) {
 		t.Fatal("wrote.txt not created in data/")
+	}
+}
+
+func TestSandboxExecInteractiveShellHomeNoUserRc(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping sandbox exec test in short mode")
+	}
+	sandboxAvailable(t)
+	bin := requireSandboxExecBinary(t, t.TempDir())
+	appDir := sbAppDir(t)
+
+	cmd := exec.Command(bin, "--allow-unsafe-no-landlock", "--as-app", appDir, "--", "bash", "-i", "-c", "echo HOME=$HOME")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("as-app failed: %v\nstderr: %s\nstdout: %s", err, stderr.String(), stdout.String())
+	}
+	want := filepath.Join(appDir, "data")
+	if got := strings.TrimSpace(stdout.String()); got != "HOME="+want {
+		t.Fatalf("HOME = %q, want %q", got, "HOME="+want)
+	}
+	if !strings.Contains(stderr.String(), "does not exist") {
+		t.Fatalf("expected data/ warning on stderr, got: %s", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "/.bashrc") {
+		t.Fatalf("interactive shell touched a user rc file: %s", stderr.String())
 	}
 }
 

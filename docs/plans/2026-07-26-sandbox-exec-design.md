@@ -7,15 +7,15 @@ Run one-off commands using the same environment, working directory, runtime sand
 ## CLI
 
 ```sh
-reverse-bin-detector --sandbox-exec APP_DIR -- COMMAND [ARGS...]
+reverse-bin-detector --as-app APP_DIR -- COMMAND [ARGS...]
 ```
 
 Examples:
 
 ```sh
-reverse-bin-detector --sandbox-exec ~/smallweb/foo -- deno test
-reverse-bin-detector --sandbox-exec ~/smallweb/foo -- ./manage.py migrate
-reverse-bin-detector --sandbox-exec ~/smallweb/foo -- /bin/bash -i
+reverse-bin-detector --as-app ~/apps/demo -- deno test
+reverse-bin-detector --as-app ~/apps/demo -- ./manage.py migrate
+reverse-bin-detector --as-app ~/apps/demo -- /bin/bash -i
 ```
 
 A command is required. Existing `reverse-bin-detector APP_DIR` JSON behavior remains unchanged.
@@ -56,7 +56,7 @@ Sandbox-exec:
 - does not daemonize;
 - reloads app environment and secrets for every invocation.
 
-Scheduling and overlap control remain external concerns. Cron or systemd timers invoke sandbox-exec; `flock` or scheduler policy prevents overlapping jobs when needed.
+Scheduling and overlap control remain external concerns. Cron or systemd timers invoke `--as-app`; `flock` or scheduler policy prevents overlapping jobs when needed.
 
 ## Identity and Path Scope
 
@@ -80,3 +80,9 @@ Cover:
 ## Scope
 
 Do not update the reverse-bin agent skill. Do not add scheduling, overlap prevention, implicit shell selection, or service-account switching to the detector.
+
+## Known limitation: Landlock does not mediate metadata syscalls
+
+Landlock only restricts path-based data operations: open for read/write/execute, create, unlink, rename, make-dir, and truncate. It does not hook pure metadata syscalls such as `stat`, `chmod`, `chown`, `utimensat`, or `readlink`. GNU `touch` on an existing file succeeds inside the sandbox (it only calls `utimensat`), and an app running under the caller UID can `chmod a=rw` any file it owns even outside its allowlist, permanently loosening host permissions.
+
+This is a Landlock ABI limit, not a detector or landrun bug; no Landlock rule can express "deny setattr while allowing read". Only mount-based sandboxes (read-only bind mounts, private tmpfs → `EROFS`) block these calls. Do not run untrusted code through `--as-app` under a privileged UID. Service key permissions must be enforced by systemd hardening (`ProtectSystem=strict`, `NoNewPrivileges`, explicit `ReadWritePaths`).
