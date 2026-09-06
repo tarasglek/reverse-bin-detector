@@ -2,6 +2,7 @@ package detector
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"os"
 	"path/filepath"
@@ -15,6 +16,128 @@ import (
 type testFile struct {
 	body string
 	mode os.FileMode
+}
+
+func TestParseCLISandboxExec(t *testing.T) {
+	got, err := parseCLIArgs([]string{"--sandbox-exec", "/apps/demo", "--", "tool", "two words", "--flag"})
+	if err != nil {
+		t.Fatalf("parseCLIArgs: %v", err)
+	}
+	if !got.sandboxExec || got.appDir != "/apps/demo" {
+		t.Fatalf("options = %#v", got)
+	}
+	want := []string{"tool", "two words", "--flag"}
+	if !reflect.DeepEqual(got.command, want) {
+		t.Fatalf("command = %#v, want %#v", got.command, want)
+	}
+}
+
+func TestRequestSandboxExecPlanReexecutesAndValidates(t *testing.T) {
+	appDir := makeApp(t, map[string]testFile{"main.ts": {body: "console.log('hello')\n"}})
+	want, err := ResolveAppWithCustomCommand(context.Background(), appDir, map[string]string{"REVERSE_BIN_PORT": "7777"}, []string{"tool", "two words"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planPath := filepath.Join(t.TempDir(), "plan.json")
+	planFile, err := os.Create(planPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.NewEncoder(planFile).Encode(want); err != nil {
+		t.Fatal(err)
+	}
+	if err := planFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	argsPath := filepath.Join(t.TempDir(), "args")
+	helper := filepath.Join(t.TempDir(), "helper.sh")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARG_LOG\"\ncat \"$PLAN_JSON\"\n"
+	if err := os.WriteFile(helper, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ARG_LOG", argsPath)
+	t.Setenv("PLAN_JSON", planPath)
+
+	got, err := requestSandboxExecPlan(context.Background(), helper, cliOptions{
+		allowUnsafeNoLandlock: true,
+		appDir:                appDir,
+		command:               []string{"tool", "two words"},
+	})
+	if err != nil {
+		t.Fatalf("requestSandboxExecPlan: %v", err)
+	}
+	if !reflect.DeepEqual(*got.Executable, *want.Executable) {
+		t.Fatalf("Executable = %#v, want %#v", *got.Executable, *want.Executable)
+	}
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantArgs := "--allow-unsafe-no-landlock\n--sandbox-exec-plan\n" + appDir + "\n--\ntool\ntwo words\n"
+	if string(args) != wantArgs {
+		t.Fatalf("child args = %q, want %q", args, wantArgs)
+	}
+}
+
+func TestRequestSandboxExecPlanRejectsInvalidOutput(t *testing.T) {
+	helper := filepath.Join(t.TempDir(), "helper.sh")
+	if err := os.WriteFile(helper, []byte("#!/bin/sh\nprintf 'not json\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := requestSandboxExecPlan(context.Background(), helper, cliOptions{appDir: "/app", command: []string{"true"}})
+	if err == nil || !strings.Contains(err.Error(), "parse sandbox exec plan") {
+		t.Fatalf("error = %v, want parse sandbox exec plan", err)
+	}
+}
+
+func TestRunSandboxExecPlan(t *testing.T) {
+	t.Setenv("PATH", "/test/bin")
+	appDir := makeApp(t, map[string]testFile{
+		"main.ts": {body: "console.log('hello')\n"},
+		".env":    {body: "REVERSE_BIN_PORT=7777\nCUSTOM=secret\n"},
+	})
+	var stdout strings.Builder
+	err := Run(context.Background(), []string{
+		"--allow-unsafe-no-landlock", "--sandbox-exec-plan", appDir, "--", "deno", "test", "two words",
+	}, &stdout)
+	if err != nil {
+		t.Fatalf("Run sandbox exec plan: %v", err)
+	}
+	plan, err := detectorschema.Parse([]byte(stdout.String()))
+	if err != nil {
+		t.Fatalf("parse plan: %v", err)
+	}
+	command := *plan.Executable
+	wantSuffix := []string{"deno", "test", "two words"}
+	if len(command) < len(wantSuffix) || !reflect.DeepEqual(command[len(command)-len(wantSuffix):], wantSuffix) {
+		t.Fatalf("Executable = %#v, want suffix %#v", command, wantSuffix)
+	}
+	if got := envMap(*plan.Envs)["CUSTOM"]; got != "secret" {
+		t.Fatalf("CUSTOM = %q, want secret", got)
+	}
+}
+
+func TestParseCLIJSONModeUnchanged(t *testing.T) {
+	got, err := parseCLIArgs([]string{"--allow-unsafe-no-landlock", "--no-runtime-sandbox", "/apps/demo"})
+	if err != nil {
+		t.Fatalf("parseCLIArgs: %v", err)
+	}
+	if got.sandboxExec || got.appDir != "/apps/demo" || !got.allowUnsafeNoLandlock || !got.noRuntimeSandbox {
+		t.Fatalf("options = %#v", got)
+	}
+}
+
+func TestParseCLISandboxExecRejectsInvalidShape(t *testing.T) {
+	for _, args := range [][]string{
+		{"--sandbox-exec"},
+		{"--sandbox-exec", "/apps/demo"},
+		{"--sandbox-exec", "/apps/demo", "tool"},
+		{"--sandbox-exec", "/apps/demo", "--"},
+	} {
+		if _, err := parseCLIArgs(args); err == nil {
+			t.Fatalf("parseCLIArgs(%#v) succeeded, want error", args)
+		}
+	}
 }
 
 func TestResolveAppBehavior(t *testing.T) {
@@ -258,6 +381,44 @@ func TestExecutableAppRuntimeSandboxesUseUnrestrictedNetwork(t *testing.T) {
 				t.Fatalf("executable sandbox command contains --bind-tcp: %q", cmd)
 			}
 		})
+	}
+}
+
+func TestResolveAppWithCustomCommand(t *testing.T) {
+	appDir := makeApp(t, map[string]testFile{
+		"main.ts":    {body: "console.log('hello')\n"},
+		"data/.keep": {body: ""},
+	})
+	env := map[string]string{"REVERSE_BIN_PORT": "7777", "CUSTOM": "value"}
+	custom := []string{"deno", "test", "--filter", "two words"}
+
+	resolved, err := ResolveAppWithCustomCommand(context.Background(), appDir, env, custom, true)
+	if err != nil {
+		t.Fatalf("ResolveAppWithCustomCommand: %v", err)
+	}
+	got := *resolved.Executable
+	if len(got) < len(custom) || !reflect.DeepEqual(got[len(got)-len(custom):], custom) {
+		t.Fatalf("Executable suffix = %#v, want %#v", got, custom)
+	}
+	joined := strings.Join(got, " ")
+	for _, want := range []string{"unshare", "landrun", "--rw " + filepath.Join(appDir, "data"), "--unrestricted-network"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("Executable %q missing %q", joined, want)
+		}
+	}
+	if gotEnv := envMap(*resolved.Envs)["CUSTOM"]; gotEnv != "value" {
+		t.Fatalf("CUSTOM = %q, want value", gotEnv)
+	}
+	if *resolved.WorkingDirectory != appDir || *resolved.ReverseProxyTo != "127.0.0.1:7777" {
+		t.Fatalf("resolved metadata = %#v", resolved)
+	}
+}
+
+func TestResolveAppWithCustomCommandRejectsEmptyCommand(t *testing.T) {
+	appDir := makeApp(t, map[string]testFile{"main.ts": {body: "console.log('hello')\n"}})
+	_, err := ResolveAppWithCustomCommand(context.Background(), appDir, nil, nil, true)
+	if err == nil || !strings.Contains(err.Error(), "command is required") {
+		t.Fatalf("error = %v, want command is required", err)
 	}
 }
 
