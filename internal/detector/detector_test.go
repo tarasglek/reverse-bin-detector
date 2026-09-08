@@ -32,6 +32,23 @@ func TestParseCLISandboxExec(t *testing.T) {
 	}
 }
 
+func TestParseCLIRBDNoSandboxIgnored(t *testing.T) {
+	t.Setenv("RBD_NO_SANDBOX", "1")
+
+	for _, args := range [][]string{
+		{"/apps/demo"},
+		{"--as-app", "/apps/demo", "--", "true"},
+	} {
+		got, err := parseCLIArgs(args)
+		if err != nil {
+			t.Fatalf("parseCLIArgs(%#v): %v", args, err)
+		}
+		if got.allowUnsafeNoLandlock || got.noRuntimeSandbox {
+			t.Fatalf("parseCLIArgs(%#v) honored RBD_NO_SANDBOX: %#v", args, got)
+		}
+	}
+}
+
 func TestRequestSandboxExecPlanReexecutesAndValidates(t *testing.T) {
 	appDir := makeApp(t, map[string]testFile{"main.ts": {body: "console.log('hello')\n"}})
 	want, err := ResolveAppWithCustomCommand(context.Background(), appDir, map[string]string{"REVERSE_BIN_PORT": "7777"}, []string{"tool", "two words"}, true)

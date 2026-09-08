@@ -62,14 +62,6 @@ func parseCLIArgs(args []string) (cliOptions, error) {
 	if err := fs.Parse(args); err != nil {
 		return cliOptions{}, err
 	}
-	// RBD_NO_SANDBOX=1 mirrors --allow-unsafe-no-landlock for --as-app: it
-	// runs the command directly (no unshare/landrun wrapper) and skips
-	// detection Landlock. Useful for CI hosts that forbid user namespaces.
-	// Explicit opt-in via environment, never silent degradation.
-	if os.Getenv("RBD_NO_SANDBOX") == "1" {
-		opts.allowUnsafeNoLandlock = true
-		opts.noRuntimeSandbox = true
-	}
 	if opts.showVersion {
 		return opts, nil
 	}
@@ -78,7 +70,7 @@ func parseCLIArgs(args []string) (cliOptions, error) {
 		return cliOptions{}, fmt.Errorf("sandbox exec modes cannot be combined")
 	}
 	if opts.sandboxExec || opts.sandboxExecPlan {
-		if len(rest) < 3 || rest[1] != "--" || rest[0] == "" || (opts.noRuntimeSandbox && os.Getenv("RBD_NO_SANDBOX") != "1") {
+		if len(rest) < 3 || rest[1] != "--" || rest[0] == "" || opts.noRuntimeSandbox {
 			return cliOptions{}, fmt.Errorf("usage: reverse-bin-detector --as-app APP_DIR -- COMMAND [ARGS...]")
 		}
 		opts.appDir = rest[0]
