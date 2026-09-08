@@ -50,14 +50,14 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Install sandbox runtime
+        run: go install github.com/zouuup/landrun/cmd/landrun@v0.1.14
+
+      - name: Enable unprivileged user namespaces
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
       - name: Run full test suite
-        env:
-          # GitHub-hosted runners forbid user namespaces (unshare
-          # --map-current-user fails), so the --as-app runtime sandbox
-          # cannot be exercised here. RBD_NO_SANDBOX=1 explicitly opts into
-          # running the functional sandbox-exec tests without the isolation
-          # layer; the isolation assertions skip with an explicit message.
-          # Never silently: without this env, tests fail loudly when user
-          # namespaces are unavailable.
-          RBD_NO_SANDBOX: "1"
         run: make check
