@@ -108,9 +108,6 @@ func TestRequestSandboxExecPlanRejectsInvalidOutput(t *testing.T) {
 }
 
 func TestRunSandboxExecPlan(t *testing.T) {
-	// This test asserts the sandbox-wrapped plan format, so force sandbox
-	// mode even when RBD_NO_SANDBOX=1 is set by the caller/CI.
-	t.Setenv("RBD_NO_SANDBOX", "0")
 	t.Setenv("PATH", "/test/bin")
 	appDir := makeApp(t, map[string]testFile{
 		"main.ts": {body: "console.log('hello')\n"},

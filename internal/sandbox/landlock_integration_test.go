@@ -33,9 +33,6 @@ func TestDetectionLandlockSubprocessRestrictions(t *testing.T) {
 			)
 			out, err := cmd.CombinedOutput()
 			text := string(out)
-			if strings.Contains(text, "SKIP landlock") {
-				t.Skip(text)
-			}
 			switch mode {
 			case "read-app", "listen":
 				if err != nil {
@@ -59,8 +56,8 @@ func TestDetectionLandlockSubprocessHelper(t *testing.T) {
 	}
 	appDir := os.Getenv("SANDBOX_APP_DIR")
 	if err := ApplyDetection(appDir, nil, LandlockOptions{}); err != nil {
-		fmt.Printf("SKIP landlock unavailable: %v\n", err)
-		os.Exit(0)
+		fmt.Printf("landlock unavailable: %v\n", err)
+		os.Exit(3)
 	}
 
 	var err error

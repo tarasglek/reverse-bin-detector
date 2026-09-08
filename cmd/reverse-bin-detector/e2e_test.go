@@ -76,37 +76,10 @@ func sbAppDir(t *testing.T) string {
 	return appDir
 }
 
-// sandboxAvailable reports whether the --as-app runtime sandbox can run here.
-// It never degrades silently:
-//   - RBD_NO_SANDBOX=1 explicitly opts out (CI hosts that forbid user namespaces).
-//   - otherwise user namespaces must work, or the test fails loudly.
-func sandboxAvailable(t *testing.T) bool {
-	t.Helper()
-	if os.Getenv("RBD_NO_SANDBOX") == "1" {
-		return false
-	}
-	cmd := exec.Command("unshare", "--map-current-user", "true")
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("user namespaces unavailable and RBD_NO_SANDBOX is not set: %v", err)
-	}
-	return true
-}
-
-// requireSandboxIsolation skips the sandbox isolation assertions only when
-// RBD_NO_SANDBOX=1 (explicit opt-out). When sandboxing is expected but
-// unavailable, sandboxAvailable fails loudly instead of skipping.
-func requireSandboxIsolation(t *testing.T) {
-	t.Helper()
-	if !sandboxAvailable(t) {
-		t.Skip("RBD_NO_SANDBOX=1: sandbox isolation not asserted")
-	}
-}
-
 func TestSandboxExecWithEcho(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping sandbox exec test in short mode")
 	}
-	sandboxAvailable(t)
 	bin := requireSandboxExecBinary(t, t.TempDir())
 	appDir := sbAppDir(t)
 
@@ -126,7 +99,6 @@ func TestSandboxExecExactEnv(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping sandbox exec test in short mode")
 	}
-	sandboxAvailable(t)
 	bin := requireSandboxExecBinary(t, t.TempDir())
 	appDir := sbAppDir(t)
 	if err := os.WriteFile(filepath.Join(appDir, ".env"), []byte("CUSTOM=secret\nREVERSE_BIN_PORT=7777\n"), 0o644); err != nil {
@@ -162,7 +134,6 @@ func TestSandboxExecExitCodePropagation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping sandbox exec test in short mode")
 	}
-	sandboxAvailable(t)
 	bin := requireSandboxExecBinary(t, t.TempDir())
 	appDir := sbAppDir(t)
 
@@ -182,7 +153,6 @@ func TestSandboxExecWorkingDirectory(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping sandbox exec test in short mode")
 	}
-	sandboxAvailable(t)
 	bin := requireSandboxExecBinary(t, t.TempDir())
 	appDir := sbAppDir(t)
 
@@ -203,7 +173,6 @@ func TestSandboxExecSourceReadOnly(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping sandbox exec test in short mode")
 	}
-	requireSandboxIsolation(t)
 	bin := requireSandboxExecBinary(t, t.TempDir())
 	appDir := sbAppDir(t)
 
@@ -222,7 +191,6 @@ func TestSandboxExecDataWritable(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping sandbox exec test in short mode")
 	}
-	requireSandboxIsolation(t)
 	bin := requireSandboxExecBinary(t, t.TempDir())
 	appDir := sbAppDir(t)
 	if err := os.MkdirAll(filepath.Join(appDir, "data"), 0o755); err != nil {
@@ -244,7 +212,6 @@ func TestSandboxExecInteractiveShellHomeNoUserRc(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping sandbox exec test in short mode")
 	}
-	sandboxAvailable(t)
 	bin := requireSandboxExecBinary(t, t.TempDir())
 	appDir := sbAppDir(t)
 
