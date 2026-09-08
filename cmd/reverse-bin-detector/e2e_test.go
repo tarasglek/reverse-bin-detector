@@ -56,7 +56,7 @@ func TestCLIInvalidAppExitsNonZero(t *testing.T) {
 	}
 }
 
-func requireSandboxExecBinary(t *testing.T, binDir string) string {
+func requireAsAppBinary(t *testing.T, binDir string) string {
 	t.Helper()
 	binPath := filepath.Join(binDir, "reverse-bin-detector-test")
 	cmd := exec.Command("go", "build", "-o", binPath, ".")
@@ -76,11 +76,11 @@ func sbAppDir(t *testing.T) string {
 	return appDir
 }
 
-func TestSandboxExecWithEcho(t *testing.T) {
+func TestAsAppWithEcho(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping sandbox exec test in short mode")
+		t.Skip("skipping as-app test in short mode")
 	}
-	bin := requireSandboxExecBinary(t, t.TempDir())
+	bin := requireAsAppBinary(t, t.TempDir())
 	appDir := sbAppDir(t)
 
 	cmd := exec.Command(bin, "--allow-unsafe-no-landlock", "--as-app", appDir, "--", "echo", "hello world")
@@ -95,11 +95,11 @@ func TestSandboxExecWithEcho(t *testing.T) {
 	}
 }
 
-func TestSandboxExecExactEnv(t *testing.T) {
+func TestAsAppExactEnv(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping sandbox exec test in short mode")
+		t.Skip("skipping as-app test in short mode")
 	}
-	bin := requireSandboxExecBinary(t, t.TempDir())
+	bin := requireAsAppBinary(t, t.TempDir())
 	appDir := sbAppDir(t)
 	if err := os.WriteFile(filepath.Join(appDir, ".env"), []byte("CUSTOM=secret\nREVERSE_BIN_PORT=7777\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -130,11 +130,11 @@ func TestSandboxExecExactEnv(t *testing.T) {
 	}
 }
 
-func TestSandboxExecExitCodePropagation(t *testing.T) {
+func TestAsAppExitCodePropagation(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping sandbox exec test in short mode")
+		t.Skip("skipping as-app test in short mode")
 	}
-	bin := requireSandboxExecBinary(t, t.TempDir())
+	bin := requireAsAppBinary(t, t.TempDir())
 	appDir := sbAppDir(t)
 
 	cmd := exec.Command(bin, "--allow-unsafe-no-landlock", "--as-app", appDir, "--", "sh", "-c", "exit 42")
@@ -149,11 +149,11 @@ func TestSandboxExecExitCodePropagation(t *testing.T) {
 	}
 }
 
-func TestSandboxExecWorkingDirectory(t *testing.T) {
+func TestAsAppWorkingDirectory(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping sandbox exec test in short mode")
+		t.Skip("skipping as-app test in short mode")
 	}
-	bin := requireSandboxExecBinary(t, t.TempDir())
+	bin := requireAsAppBinary(t, t.TempDir())
 	appDir := sbAppDir(t)
 
 	cmd := exec.Command(bin, "--allow-unsafe-no-landlock", "--as-app", appDir, "--", "pwd")
@@ -169,11 +169,11 @@ func TestSandboxExecWorkingDirectory(t *testing.T) {
 	}
 }
 
-func TestSandboxExecSourceReadOnly(t *testing.T) {
+func TestAsAppSourceReadOnly(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping sandbox exec test in short mode")
+		t.Skip("skipping as-app test in short mode")
 	}
-	bin := requireSandboxExecBinary(t, t.TempDir())
+	bin := requireAsAppBinary(t, t.TempDir())
 	appDir := sbAppDir(t)
 
 	// Source write should fail
@@ -187,11 +187,11 @@ func TestSandboxExecSourceReadOnly(t *testing.T) {
 	}
 }
 
-func TestSandboxExecDataWritable(t *testing.T) {
+func TestAsAppDataWritable(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping sandbox exec test in short mode")
+		t.Skip("skipping as-app test in short mode")
 	}
-	bin := requireSandboxExecBinary(t, t.TempDir())
+	bin := requireAsAppBinary(t, t.TempDir())
 	appDir := sbAppDir(t)
 	if err := os.MkdirAll(filepath.Join(appDir, "data"), 0o755); err != nil {
 		t.Fatal(err)
@@ -208,11 +208,11 @@ func TestSandboxExecDataWritable(t *testing.T) {
 	}
 }
 
-func TestSandboxExecInteractiveShellHomeNoUserRc(t *testing.T) {
+func TestAsAppInteractiveShellHomeNoUserRc(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping sandbox exec test in short mode")
+		t.Skip("skipping as-app test in short mode")
 	}
-	bin := requireSandboxExecBinary(t, t.TempDir())
+	bin := requireAsAppBinary(t, t.TempDir())
 	appDir := sbAppDir(t)
 
 	cmd := exec.Command(bin, "--allow-unsafe-no-landlock", "--as-app", appDir, "--", "bash", "-i", "-c", "echo HOME=$HOME")

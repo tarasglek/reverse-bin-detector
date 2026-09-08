@@ -18,12 +18,12 @@ type testFile struct {
 	mode os.FileMode
 }
 
-func TestParseCLISandboxExec(t *testing.T) {
+func TestParseCLIAsApp(t *testing.T) {
 	got, err := parseCLIArgs([]string{"--as-app", "/apps/demo", "--", "tool", "two words", "--flag"})
 	if err != nil {
 		t.Fatalf("parseCLIArgs: %v", err)
 	}
-	if !got.sandboxExec || got.appDir != "/apps/demo" {
+	if !got.asApp || got.appDir != "/apps/demo" {
 		t.Fatalf("options = %#v", got)
 	}
 	want := []string{"tool", "two words", "--flag"}
@@ -32,24 +32,7 @@ func TestParseCLISandboxExec(t *testing.T) {
 	}
 }
 
-func TestParseCLIRBDNoSandboxIgnored(t *testing.T) {
-	t.Setenv("RBD_NO_SANDBOX", "1")
-
-	for _, args := range [][]string{
-		{"/apps/demo"},
-		{"--as-app", "/apps/demo", "--", "true"},
-	} {
-		got, err := parseCLIArgs(args)
-		if err != nil {
-			t.Fatalf("parseCLIArgs(%#v): %v", args, err)
-		}
-		if got.allowUnsafeNoLandlock || got.noRuntimeSandbox {
-			t.Fatalf("parseCLIArgs(%#v) honored RBD_NO_SANDBOX: %#v", args, got)
-		}
-	}
-}
-
-func TestRequestSandboxExecPlanReexecutesAndValidates(t *testing.T) {
+func TestRequestAsAppPlanReexecutesAndValidates(t *testing.T) {
 	appDir := makeApp(t, map[string]testFile{"main.ts": {body: "console.log('hello')\n"}})
 	want, err := ResolveAppWithCustomCommand(context.Background(), appDir, map[string]string{"REVERSE_BIN_PORT": "7777"}, []string{"tool", "two words"}, true)
 	if err != nil {
@@ -75,13 +58,13 @@ func TestRequestSandboxExecPlanReexecutesAndValidates(t *testing.T) {
 	t.Setenv("ARG_LOG", argsPath)
 	t.Setenv("PLAN_JSON", planPath)
 
-	got, err := requestSandboxExecPlan(context.Background(), helper, cliOptions{
+	got, err := requestAsAppPlan(context.Background(), helper, cliOptions{
 		allowUnsafeNoLandlock: true,
 		appDir:                appDir,
 		command:               []string{"tool", "two words"},
 	})
 	if err != nil {
-		t.Fatalf("requestSandboxExecPlan: %v", err)
+		t.Fatalf("requestAsAppPlan: %v", err)
 	}
 	if !reflect.DeepEqual(*got.Executable, *want.Executable) {
 		t.Fatalf("Executable = %#v, want %#v", *got.Executable, *want.Executable)
@@ -96,18 +79,18 @@ func TestRequestSandboxExecPlanReexecutesAndValidates(t *testing.T) {
 	}
 }
 
-func TestRequestSandboxExecPlanRejectsInvalidOutput(t *testing.T) {
+func TestRequestAsAppPlanRejectsInvalidOutput(t *testing.T) {
 	helper := filepath.Join(t.TempDir(), "helper.sh")
 	if err := os.WriteFile(helper, []byte("#!/bin/sh\nprintf 'not json\\n'\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_, err := requestSandboxExecPlan(context.Background(), helper, cliOptions{appDir: "/app", command: []string{"true"}})
-	if err == nil || !strings.Contains(err.Error(), "parse sandbox exec plan") {
-		t.Fatalf("error = %v, want parse sandbox exec plan", err)
+	_, err := requestAsAppPlan(context.Background(), helper, cliOptions{appDir: "/app", command: []string{"true"}})
+	if err == nil || !strings.Contains(err.Error(), "parse as-app plan") {
+		t.Fatalf("error = %v, want parse as-app plan", err)
 	}
 }
 
-func TestRunSandboxExecPlan(t *testing.T) {
+func TestRunAsAppPlan(t *testing.T) {
 	t.Setenv("PATH", "/test/bin")
 	appDir := makeApp(t, map[string]testFile{
 		"main.ts": {body: "console.log('hello')\n"},
@@ -118,7 +101,7 @@ func TestRunSandboxExecPlan(t *testing.T) {
 		"--allow-unsafe-no-landlock", "--as-app-plan", appDir, "--", "deno", "test", "two words",
 	}, &stdout)
 	if err != nil {
-		t.Fatalf("Run sandbox exec plan: %v", err)
+		t.Fatalf("Run as-app plan: %v", err)
 	}
 	plan, err := detectorschema.Parse([]byte(stdout.String()))
 	if err != nil {
@@ -146,12 +129,12 @@ func TestParseCLIJSONModeUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseCLIArgs: %v", err)
 	}
-	if got.sandboxExec || got.appDir != "/apps/demo" || !got.allowUnsafeNoLandlock || !got.noRuntimeSandbox {
+	if got.asApp || got.appDir != "/apps/demo" || !got.allowUnsafeNoLandlock || !got.noRuntimeSandbox {
 		t.Fatalf("options = %#v", got)
 	}
 }
 
-func TestParseCLISandboxExecRejectsInvalidShape(t *testing.T) {
+func TestParseCLIAsAppRejectsInvalidShape(t *testing.T) {
 	for _, args := range [][]string{
 		{"--as-app"},
 		{"--as-app", "/apps/demo"},

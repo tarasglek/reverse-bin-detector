@@ -1,4 +1,4 @@
-# Sandbox Exec Design
+# `--as-app` Design
 
 ## Goal
 
@@ -36,7 +36,7 @@ Tests and jobs that create state must write under an approved writable path such
 
 ## Execution Architecture
 
-Landlock restrictions applied during detection cannot be removed. Sandbox-exec therefore uses two processes:
+Landlock restrictions applied during detection cannot be removed. `--as-app` therefore uses two processes:
 
 1. An unrestricted parent starts a restricted detector child.
 2. The child detects the app and generates a validated launch plan containing the requested command.
@@ -47,7 +47,7 @@ The custom command is inserted before runtime wrapping. The implementation must 
 
 ## Process Semantics
 
-Sandbox-exec:
+`--as-app`:
 
 - works without a TTY;
 - inherits stdin, stdout, and stderr;
@@ -60,7 +60,7 @@ Scheduling and overlap control remain external concerns. Cron or systemd timers 
 
 ## Identity and Path Scope
 
-Sandbox-exec reproduces detector-generated per-app isolation for the supplied path and caller. It does not independently reproduce service-wide systemd settings or change to the packaged `reverse-bin` account. Full production parity requires invoking it with the production identity, canonical app path, service `PATH`, and SOPS environment.
+`--as-app` reproduces detector-generated per-app isolation for the supplied path and caller. It does not independently reproduce service-wide systemd settings or change to the packaged `reverse-bin` account. Full production parity requires invoking it with the production identity, canonical app path, service `PATH`, and SOPS environment.
 
 ## Testing
 

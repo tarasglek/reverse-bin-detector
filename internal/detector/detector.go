@@ -44,8 +44,8 @@ type cliOptions struct {
 	allowUnsafeNoLandlock bool
 	noRuntimeSandbox      bool
 	showVersion           bool
-	sandboxExec           bool
-	sandboxExecPlan       bool
+	asApp                 bool
+	asAppPlan             bool
 	appDir                string
 	command               []string
 }
@@ -57,8 +57,8 @@ func parseCLIArgs(args []string) (cliOptions, error) {
 	fs.BoolVar(&opts.allowUnsafeNoLandlock, "allow-unsafe-no-landlock", false, "disable detection Landlock sandbox")
 	fs.BoolVar(&opts.noRuntimeSandbox, "no-runtime-sandbox", false, "emit backend command without runtime sandbox wrapper")
 	fs.BoolVar(&opts.showVersion, "version", false, "print version and exit")
-	fs.BoolVar(&opts.sandboxExec, "as-app", false, "execute command with app runtime sandbox")
-	fs.BoolVar(&opts.sandboxExecPlan, "as-app-plan", false, "")
+	fs.BoolVar(&opts.asApp, "as-app", false, "execute command with app runtime sandbox")
+	fs.BoolVar(&opts.asAppPlan, "as-app-plan", false, "")
 	if err := fs.Parse(args); err != nil {
 		return cliOptions{}, err
 	}
@@ -66,10 +66,10 @@ func parseCLIArgs(args []string) (cliOptions, error) {
 		return opts, nil
 	}
 	rest := fs.Args()
-	if opts.sandboxExec && opts.sandboxExecPlan {
-		return cliOptions{}, fmt.Errorf("sandbox exec modes cannot be combined")
+	if opts.asApp && opts.asAppPlan {
+		return cliOptions{}, fmt.Errorf("as-app modes cannot be combined")
 	}
-	if opts.sandboxExec || opts.sandboxExecPlan {
+	if opts.asApp || opts.asAppPlan {
 		if len(rest) < 3 || rest[1] != "--" || rest[0] == "" || opts.noRuntimeSandbox {
 			return cliOptions{}, fmt.Errorf("usage: reverse-bin-detector --as-app APP_DIR -- COMMAND [ARGS...]")
 		}
@@ -94,26 +94,26 @@ func Run(ctx context.Context, args []string, stdout io.Writer) error {
 		_, err := fmt.Fprintf(stdout, "%s %s %s\n", Version, Commit, BuildDate)
 		return err
 	}
-	if opts.sandboxExec {
-		return runSandboxExec(ctx, opts)
+	if opts.asApp {
+		return runAsApp(ctx, opts)
 	}
 	return emitPlan(ctx, opts, stdout)
 }
 
-func runSandboxExec(ctx context.Context, opts cliOptions) error {
+func runAsApp(ctx context.Context, opts cliOptions) error {
 	execPath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("get executable path: %w", err)
 	}
-	plan, err := requestSandboxExecPlan(ctx, execPath, opts)
+	plan, err := requestAsAppPlan(ctx, execPath, opts)
 	if err != nil {
 		return err
 	}
 	if plan.WorkingDirectory == nil || *plan.WorkingDirectory == "" {
-		return fmt.Errorf("sandbox exec plan missing working directory")
+		return fmt.Errorf("as-app plan missing working directory")
 	}
 	if len(*plan.Executable) == 0 {
-		return fmt.Errorf("sandbox exec plan missing executable")
+		return fmt.Errorf("as-app plan missing executable")
 	}
 	if err := os.Chdir(*plan.WorkingDirectory); err != nil {
 		return fmt.Errorf("change to working directory %s: %w", *plan.WorkingDirectory, err)
@@ -134,7 +134,7 @@ func runSandboxExec(ctx context.Context, opts cliOptions) error {
 	return nil
 }
 
-func requestSandboxExecPlan(ctx context.Context, executable string, opts cliOptions) (*detectorschema.DetectorOutput, error) {
+func requestAsAppPlan(ctx context.Context, executable string, opts cliOptions) (*detectorschema.DetectorOutput, error) {
 	args := make([]string, 0, len(opts.command)+5)
 	if opts.allowUnsafeNoLandlock {
 		args = append(args, "--allow-unsafe-no-landlock")
@@ -148,11 +148,11 @@ func requestSandboxExecPlan(ctx context.Context, executable string, opts cliOpti
 	cmd.Stderr = os.Stderr
 	output, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("generate sandbox exec plan: %w", err)
+		return nil, fmt.Errorf("generate as-app plan: %w", err)
 	}
 	plan, err := detectorschema.Parse(output)
 	if err != nil {
-		return nil, fmt.Errorf("parse sandbox exec plan: %w", err)
+		return nil, fmt.Errorf("parse as-app plan: %w", err)
 	}
 	return plan, nil
 }
@@ -169,7 +169,7 @@ func emitPlan(ctx context.Context, opts cliOptions, stdout io.Writer) error {
 		return err
 	}
 	var out detectorschema.DetectorOutput
-	if opts.sandboxExecPlan {
+	if opts.asAppPlan {
 		out, err = ResolveAppWithCustomCommand(ctx, appDir, env, opts.command, !opts.noRuntimeSandbox)
 	} else {
 		out, err = ResolveAppWithRuntimeSandbox(ctx, appDir, env, !opts.noRuntimeSandbox)

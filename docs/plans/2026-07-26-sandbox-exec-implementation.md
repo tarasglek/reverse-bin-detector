@@ -1,4 +1,4 @@
-# Sandbox Exec Implementation Plan
+# `--as-app` Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
@@ -17,7 +17,7 @@
   - Implement: add minimal resolver accepting explicit argument vector; reject empty command.
   - Verify GREEN: `go test ./internal/detector -run 'TestResolve.*CustomCommand'`.
 
-- [x] Task 2: Parse sandbox-exec CLI without changing JSON mode
+- [x] Task 2: Parse --as-app CLI without changing JSON mode
   - Files: `internal/detector/detector.go`, `cmd/reverse-bin-detector/main_test.go`
   - Test first: cover normal `APP_DIR`, `--as-app APP_DIR -- COMMAND...`, missing app, missing separator, and missing command.
   - Verify RED: focused CLI tests fail because flag is unknown.
@@ -34,16 +34,16 @@
 - [x] Task 4: Execute plan with exact process semantics
   - Files: `cmd/reverse-bin-detector/main.go`, `cmd/reverse-bin-detector/e2e_test.go`
   - Test first: verify working directory, exact env/no caller leak, argument preservation, stdout/stderr, and exit status.
-  - Verify RED: E2E sandbox-exec tests fail because parent does not execute plan.
+  - Verify RED: E2E --as-app tests fail because parent does not execute plan.
   - Implement: inherit standard streams, set generated working directory, run generated executable, and propagate command exit status. No fallback.
-  - Verify GREEN: `go test ./cmd/reverse-bin-detector -run SandboxExec`.
+  - Verify GREEN: `go test ./cmd/reverse-bin-detector -run AsApp`.
 
 - [x] Task 5: Verify isolation and automation behavior
   - Files: `cmd/reverse-bin-detector/e2e_test.go`
   - Test first: source write fails, `data/` write succeeds for executable app, noninteractive invocation works, and namespace child dies on termination.
   - Verify RED: each new assertion must expose missing or incorrect behavior before its corresponding fix.
   - Implement: minimal signal/process handling fixes only where tests require them.
-  - Verify GREEN: `go test ./cmd/reverse-bin-detector -run SandboxExec`.
+  - Verify GREEN: `go test ./cmd/reverse-bin-detector -run AsApp`.
 
 - [x] Task 6: Document CLI, then run full gate
   - Files: `README.md` or CLI usage documentation; do not modify agent skills.
