@@ -438,6 +438,29 @@ func TestResolveAppWithCustomCommand(t *testing.T) {
 	}
 }
 
+func TestResolveAppDefaultsHomeWithoutDataDirectory(t *testing.T) {
+	appDir := makeApp(t, map[string]testFile{"main.ts": {body: "console.log('hello')\n"}})
+
+	resolved, err := ResolveAppWithRuntimeSandbox(context.Background(), appDir, map[string]string{"REVERSE_BIN_PORT": "7777"}, false)
+	if err != nil {
+		t.Fatalf("ResolveAppWithRuntimeSandbox: %v", err)
+	}
+	if got, want := envMap(*resolved.Envs)["HOME"], filepath.Join(appDir, "data"); got != want {
+		t.Fatalf("HOME = %q, want %q", got, want)
+	}
+
+	resolved, err = ResolveAppWithRuntimeSandbox(context.Background(), appDir, map[string]string{
+		"REVERSE_BIN_PORT": "7777",
+		"HOME":             "/custom/home",
+	}, false)
+	if err != nil {
+		t.Fatalf("ResolveAppWithRuntimeSandbox with HOME: %v", err)
+	}
+	if got := envMap(*resolved.Envs)["HOME"]; got != "/custom/home" {
+		t.Fatalf("HOME = %q, want /custom/home", got)
+	}
+}
+
 func TestResolveAppWithCustomCommandRejectsEmptyCommand(t *testing.T) {
 	appDir := makeApp(t, map[string]testFile{"main.ts": {body: "console.log('hello')\n"}})
 	_, err := ResolveAppWithCustomCommand(context.Background(), appDir, nil, nil, true)

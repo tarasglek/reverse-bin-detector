@@ -407,30 +407,10 @@ func resolveApp(ctx context.Context, appDir string, env map[string]string, custo
 		}
 	}
 	envs := buildAppEnvs(appDir, env, overrides, app.kind)
-	if customCommand != nil {
-		envs = defaultPlanHome(envs, appDir)
-	}
 	if runtimeSandbox {
 		cmd = wrapPIDNamespace(wrapRuntimeSandbox(cmd, appDir, tr, envs, app.kind))
 	}
 	return schemaOutput(cmd, appDir, envs, tr.proxy, cfg), nil
-}
-
-// defaultPlanHome guarantees HOME in the plan environment so interactive
-// shells cannot fall back to the caller's password-database home directory
-// and source its rc files. HOME is always the app data dir, matching
-// production; warn when data/ does not exist yet.
-func defaultPlanHome(envs []string, appDir string) []string {
-	for _, entry := range envs {
-		if strings.HasPrefix(entry, "HOME=") {
-			return envs
-		}
-	}
-	dataDir := filepath.Join(appDir, "data")
-	if _, err := os.Stat(dataDir); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: %s does not exist; create it with mkdir -p %s (HOME points there anyway)\n", dataDir, dataDir)
-	}
-	return append(envs, "HOME="+dataDir)
 }
 
 func schemaOutput(cmd []string, appDir string, envs []string, proxy string, cfg EnvAppConfig) detectorschema.DetectorOutput {
@@ -626,10 +606,7 @@ func buildAppEnvs(appDir string, appEnv map[string]string, overrides map[string]
 		}
 	}
 	if _, ok := merged["HOME"]; !ok {
-		dataDir := filepath.Join(appDir, "data")
-		if st, err := os.Stat(dataDir); err == nil && st.IsDir() {
-			merged["HOME"] = dataDir
-		}
+		merged["HOME"] = filepath.Join(appDir, "data")
 	}
 	if _, ok := merged["TMPDIR"]; !ok {
 		merged["TMPDIR"] = "data"

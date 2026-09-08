@@ -226,9 +226,6 @@ func TestSandboxExecInteractiveShellHomeNoUserRc(t *testing.T) {
 	if got := strings.TrimSpace(stdout.String()); got != "HOME="+want {
 		t.Fatalf("HOME = %q, want %q", got, "HOME="+want)
 	}
-	if !strings.Contains(stderr.String(), "does not exist") {
-		t.Fatalf("expected data/ warning on stderr, got: %s", stderr.String())
-	}
 	if strings.Contains(stderr.String(), "/.bashrc") {
 		t.Fatalf("interactive shell touched a user rc file: %s", stderr.String())
 	}
