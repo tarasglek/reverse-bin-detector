@@ -40,25 +40,110 @@ const (
 	KeyReverseBinHealthStatus = "REVERSE_BIN_HEALTH_STATUS"
 )
 
-// Run executes the detector CLI.
-func Run(ctx context.Context, args []string, stdout io.Writer) error {
+type cliOptions struct {
+	allowUnsafeNoLandlock bool
+	noRuntimeSandbox      bool
+	showVersion           bool
+	asApp                 bool
+	asAppPlan             bool
+	appDir                string
+	command               []string
+}
+
+func parseCLIArgs(args []string) (cliOptions, error) {
+	var opts cliOptions
 	fs := flag.NewFlagSet("reverse-bin-detector", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	allowUnsafeNoLandlock := fs.Bool("allow-unsafe-no-landlock", false, "disable detection Landlock sandbox")
-	noRuntimeSandbox := fs.Bool("no-runtime-sandbox", false, "emit backend command without runtime sandbox wrapper")
-	showVersion := fs.Bool("version", false, "print version and exit")
+	fs.BoolVar(&opts.allowUnsafeNoLandlock, "allow-unsafe-no-landlock", false, "disable detection Landlock sandbox")
+	fs.BoolVar(&opts.noRuntimeSandbox, "no-runtime-sandbox", false, "emit backend command without runtime sandbox wrapper")
+	fs.BoolVar(&opts.showVersion, "version", false, "print version and exit")
+	fs.BoolVar(&opts.asApp, "as-app", false, "execute command with app runtime sandbox")
+	fs.BoolVar(&opts.asAppPlan, "as-app-plan", false, "")
 	if err := fs.Parse(args); err != nil {
+		return cliOptions{}, err
+	}
+	if opts.showVersion {
+		return opts, nil
+	}
+	rest := fs.Args()
+	if opts.asApp && opts.asAppPlan {
+		return cliOptions{}, fmt.Errorf("as-app modes cannot be combined")
+	}
+	if opts.asApp || opts.asAppPlan {
+		if len(rest) < 3 || rest[1] != "--" || rest[0] == "" || opts.noRuntimeSandbox {
+			return cliOptions{}, fmt.Errorf("usage: reverse-bin-detector --as-app APP_DIR -- COMMAND [ARGS...]")
+		}
+		opts.command = append([]string(nil), rest[2:]...)
+	} else if len(rest) != 1 {
+		return cliOptions{}, fmt.Errorf("usage: reverse-bin-detector [--allow-unsafe-no-landlock] APP_DIR\n       reverse-bin-detector --as-app APP_DIR -- COMMAND [ARGS...]")
+	}
+	appDir, err := filepath.Abs(rest[0])
+	if err != nil {
+		return cliOptions{}, fmt.Errorf("resolve app directory: %w", err)
+	}
+	opts.appDir = appDir
+	return opts, nil
+}
+
+// Run executes the detector CLI.
+func Run(ctx context.Context, args []string, stdout io.Writer) error {
+	opts, err := parseCLIArgs(args)
+	if err != nil {
 		return err
 	}
-	if *showVersion {
+	if opts.showVersion {
 		_, err := fmt.Fprintf(stdout, "%s %s %s\n", Version, Commit, BuildDate)
 		return err
 	}
-	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: reverse-bin-detector [--allow-unsafe-no-landlock] APP_DIR")
+	if opts.asApp {
+		return runAsApp(ctx, opts)
 	}
-	appDir := fs.Arg(0)
-	if !*allowUnsafeNoLandlock {
+	return emitPlan(ctx, opts, stdout)
+}
+
+func runAsApp(ctx context.Context, opts cliOptions) error {
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("get executable path: %w", err)
+	}
+	args := []string{"--as-app-plan", opts.appDir, "--"}
+	if opts.allowUnsafeNoLandlock {
+		args = append([]string{"--allow-unsafe-no-landlock"}, args...)
+	}
+	cmd := exec.CommandContext(ctx, executable, append(args, opts.command...)...)
+	cmd.Stderr = os.Stderr
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("generate as-app plan: %w", err)
+	}
+	plan, err := detectorschema.Parse(output)
+	if err != nil {
+		return fmt.Errorf("parse as-app plan: %w", err)
+	}
+	return executeAsAppPlan(plan)
+}
+
+func executeAsAppPlan(plan *detectorschema.DetectorOutput) error {
+	if plan == nil || plan.Executable == nil || len(*plan.Executable) == 0 {
+		return fmt.Errorf("as-app plan missing executable")
+	}
+	if plan.WorkingDirectory == nil || *plan.WorkingDirectory == "" {
+		return fmt.Errorf("as-app plan missing working directory")
+	}
+	cmd := exec.Command((*plan.Executable)[0], (*plan.Executable)[1:]...)
+	cmd.Dir = *plan.WorkingDirectory
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if plan.Envs != nil {
+		cmd.Env = *plan.Envs
+	}
+	return cmd.Run()
+}
+
+func emitPlan(ctx context.Context, opts cliOptions, stdout io.Writer) error {
+	appDir := opts.appDir
+	if !opts.allowUnsafeNoLandlock {
 		if err := sandbox.ApplyDetection(appDir, environMap(os.Environ()), sandbox.LandlockOptions{}); err != nil {
 			return err
 		}
@@ -67,7 +152,12 @@ func Run(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	out, err := ResolveAppWithRuntimeSandbox(ctx, appDir, env, !*noRuntimeSandbox)
+	var out detectorschema.DetectorOutput
+	if opts.asAppPlan {
+		out, err = resolveApp(ctx, appDir, env, opts.command, true)
+	} else {
+		out, err = ResolveAppWithRuntimeSandbox(ctx, appDir, env, !opts.noRuntimeSandbox)
+	}
 	if err != nil {
 		return err
 	}
@@ -269,6 +359,10 @@ func ResolveApp(ctx context.Context, appDir string, env map[string]string) (dete
 }
 
 func ResolveAppWithRuntimeSandbox(ctx context.Context, appDir string, env map[string]string, runtimeSandbox bool) (detectorschema.DetectorOutput, error) {
+	return resolveApp(ctx, appDir, env, nil, runtimeSandbox)
+}
+
+func resolveApp(ctx context.Context, appDir string, env map[string]string, customCommand []string, runtimeSandbox bool) (detectorschema.DetectorOutput, error) {
 	_ = ctx
 	cfg, err := LoadEnvAppConfig(env)
 	if err != nil {
@@ -282,9 +376,12 @@ func ResolveAppWithRuntimeSandbox(ctx context.Context, appDir string, env map[st
 	if err != nil {
 		return detectorschema.DetectorOutput{}, err
 	}
-	cmd, err := commandFor(app, tr)
-	if err != nil {
-		return detectorschema.DetectorOutput{}, err
+	cmd := append([]string(nil), customCommand...)
+	if cmd == nil {
+		cmd, err = commandFor(app, tr)
+		if err != nil {
+			return detectorschema.DetectorOutput{}, err
+		}
 	}
 	envs := buildAppEnvs(appDir, env, overrides, app.kind)
 	if runtimeSandbox {
@@ -486,10 +583,7 @@ func buildAppEnvs(appDir string, appEnv map[string]string, overrides map[string]
 		}
 	}
 	if _, ok := merged["HOME"]; !ok {
-		dataDir := filepath.Join(appDir, "data")
-		if st, err := os.Stat(dataDir); err == nil && st.IsDir() {
-			merged["HOME"] = dataDir
-		}
+		merged["HOME"] = filepath.Join(appDir, "data")
 	}
 	if _, ok := merged["TMPDIR"]; !ok {
 		merged["TMPDIR"] = "data"

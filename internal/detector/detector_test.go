@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -15,6 +16,85 @@ import (
 type testFile struct {
 	body string
 	mode os.FileMode
+}
+
+func TestParseCLIAsApp(t *testing.T) {
+	got, err := parseCLIArgs([]string{"--as-app", "/apps/demo", "--", "tool", "two words", "--flag"})
+	if err != nil {
+		t.Fatalf("parseCLIArgs: %v", err)
+	}
+	if !got.asApp || got.appDir != "/apps/demo" {
+		t.Fatalf("options = %#v", got)
+	}
+	want := []string{"tool", "two words", "--flag"}
+	if !reflect.DeepEqual(got.command, want) {
+		t.Fatalf("command = %#v, want %#v", got.command, want)
+	}
+}
+
+func TestParseCLINormalizesAppDir(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+
+	for _, args := range [][]string{
+		{"app"},
+		{"--as-app", "app", "--", "true"},
+	} {
+		got, err := parseCLIArgs(args)
+		if err != nil {
+			t.Fatalf("parseCLIArgs(%#v): %v", args, err)
+		}
+		if want := filepath.Join(root, "app"); got.appDir != want {
+			t.Fatalf("appDir = %q, want %q", got.appDir, want)
+		}
+	}
+}
+
+func TestExecuteAsAppPlanRejectsMissingExecutable(t *testing.T) {
+	err := executeAsAppPlan(&detectorschema.DetectorOutput{})
+	if err == nil || !strings.Contains(err.Error(), "missing executable") {
+		t.Fatalf("error = %v, want missing executable", err)
+	}
+}
+
+func TestExecuteAsAppPlanReturnsExitError(t *testing.T) {
+	workingDirectory := t.TempDir()
+	executable := []string{"sh", "-c", "exit 42"}
+	envs := os.Environ()
+	plan := &detectorschema.DetectorOutput{
+		Executable:       &executable,
+		WorkingDirectory: &workingDirectory,
+		Envs:             &envs,
+	}
+
+	err := executeAsAppPlan(plan)
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok || exitErr.ExitCode() != 42 {
+		t.Fatalf("error = %T %v, want exit code 42", err, err)
+	}
+}
+
+func TestParseCLIJSONModeUnchanged(t *testing.T) {
+	got, err := parseCLIArgs([]string{"--allow-unsafe-no-landlock", "--no-runtime-sandbox", "/apps/demo"})
+	if err != nil {
+		t.Fatalf("parseCLIArgs: %v", err)
+	}
+	if got.asApp || got.appDir != "/apps/demo" || !got.allowUnsafeNoLandlock || !got.noRuntimeSandbox {
+		t.Fatalf("options = %#v", got)
+	}
+}
+
+func TestParseCLIAsAppRejectsInvalidShape(t *testing.T) {
+	for _, args := range [][]string{
+		{"--as-app"},
+		{"--as-app", "/apps/demo"},
+		{"--as-app", "/apps/demo", "tool"},
+		{"--as-app", "/apps/demo", "--"},
+	} {
+		if _, err := parseCLIArgs(args); err == nil {
+			t.Fatalf("parseCLIArgs(%#v) succeeded, want error", args)
+		}
+	}
 }
 
 func TestResolveAppBehavior(t *testing.T) {
@@ -258,6 +338,29 @@ func TestExecutableAppRuntimeSandboxesUseUnrestrictedNetwork(t *testing.T) {
 				t.Fatalf("executable sandbox command contains --bind-tcp: %q", cmd)
 			}
 		})
+	}
+}
+
+func TestResolveAppDefaultsHomeWithoutDataDirectory(t *testing.T) {
+	appDir := makeApp(t, map[string]testFile{"main.ts": {body: "console.log('hello')\n"}})
+
+	resolved, err := ResolveAppWithRuntimeSandbox(context.Background(), appDir, map[string]string{"REVERSE_BIN_PORT": "7777"}, false)
+	if err != nil {
+		t.Fatalf("ResolveAppWithRuntimeSandbox: %v", err)
+	}
+	if got, want := envMap(*resolved.Envs)["HOME"], filepath.Join(appDir, "data"); got != want {
+		t.Fatalf("HOME = %q, want %q", got, want)
+	}
+
+	resolved, err = ResolveAppWithRuntimeSandbox(context.Background(), appDir, map[string]string{
+		"REVERSE_BIN_PORT": "7777",
+		"HOME":             "/custom/home",
+	}, false)
+	if err != nil {
+		t.Fatalf("ResolveAppWithRuntimeSandbox with HOME: %v", err)
+	}
+	if got := envMap(*resolved.Envs)["HOME"]; got != "/custom/home" {
+		t.Fatalf("HOME = %q, want /custom/home", got)
 	}
 }
 
