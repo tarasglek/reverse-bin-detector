@@ -27,7 +27,7 @@ func TestLoadAppEnvDecryptsSecretsEncJSONWithSOPS(t *testing.T) {
 	binDir := t.TempDir()
 	writeFile(t, filepath.Join(appDir, "secrets.enc.json"), `{"sops":"metadata"}`+"\n")
 	fakeSOPS := filepath.Join(binDir, "sops")
-	writeFile(t, fakeSOPS, "#!/bin/sh\nprintf '%s\\n' 'SECRET=from-sops' 'EMPTY='\n")
+	writeFile(t, fakeSOPS, "#!/bin/sh\necho 'SECRET=from-sops'\necho 'EMPTY='\n")
 	if err := os.Chmod(fakeSOPS, 0o755); err != nil {
 		t.Fatalf("chmod fake sops: %v", err)
 	}
