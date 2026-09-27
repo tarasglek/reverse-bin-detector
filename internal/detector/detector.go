@@ -372,6 +372,19 @@ func resolveApp(ctx context.Context, appDir string, env map[string]string, custo
 	if err != nil {
 		return detectorschema.DetectorOutput{}, err
 	}
+	if app.kind != staticApp {
+		dataDir := filepath.Join(appDir, "data")
+		info, err := os.Stat(dataDir)
+		if os.IsNotExist(err) {
+			return detectorschema.DetectorOutput{}, fmt.Errorf("app requires a writable data directory; run mkdir -p %s", dataDir)
+		}
+		if err != nil {
+			return detectorschema.DetectorOutput{}, fmt.Errorf("inspect app data directory %s: %w", dataDir, err)
+		}
+		if !info.IsDir() {
+			return detectorschema.DetectorOutput{}, fmt.Errorf("app data path %s is not a directory; replace it with a directory (mkdir -p %s)", dataDir, dataDir)
+		}
+	}
 	tr, overrides, err := resolveTransport(appDir, cfg, app.kind)
 	if err != nil {
 		return detectorschema.DetectorOutput{}, err

@@ -12,6 +12,9 @@ import (
 
 func TestCLIOutputParsesWithDetectorSchema(t *testing.T) {
 	appDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(appDir, "data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	mainPy := filepath.Join(appDir, "main.py")
 	if err := os.WriteFile(mainPy, []byte("#!/usr/bin/env python3\n"), 0o755); err != nil {
 		t.Fatal(err)

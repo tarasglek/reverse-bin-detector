@@ -251,6 +251,55 @@ func TestResolveAppBehavior(t *testing.T) {
 	}
 }
 
+func TestResolveExecutableAppRequiresDataDirectory(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		files map[string]testFile
+		env   map[string]string
+	}{
+		{"deno", map[string]testFile{"main.ts": {body: "export default {}\n"}}, map[string]string{"REVERSE_BIN_PORT": "7777"}},
+		{"python", map[string]testFile{"main.py": {body: "#!/usr/bin/env python3\n", mode: 0o755}}, nil},
+		{"explicit", nil, map[string]string{"REVERSE_BIN_COMMAND": "server", "REVERSE_BIN_PORT": "7777"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			appDir := makeApp(t, tt.files)
+			if err := os.Remove(filepath.Join(appDir, "data")); err != nil {
+				t.Fatal(err)
+			}
+			for _, sandboxed := range []bool{false, true} {
+				_, err := ResolveAppWithRuntimeSandbox(context.Background(), appDir, tt.env, sandboxed)
+				if err == nil || !strings.Contains(err.Error(), "mkdir -p "+filepath.Join(appDir, "data")) {
+					t.Fatalf("sandboxed=%t: error = %v, want mkdir instruction", sandboxed, err)
+				}
+			}
+		})
+	}
+}
+
+func TestResolveAppRejectsDataFile(t *testing.T) {
+	appDir := makeApp(t, map[string]testFile{"main.ts": {body: "export default {}\n"}})
+	if err := os.Remove(filepath.Join(appDir, "data")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "data"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ResolveApp(context.Background(), appDir, map[string]string{"REVERSE_BIN_PORT": "7777"})
+	if err == nil || !strings.Contains(err.Error(), "is not a directory") || !strings.Contains(err.Error(), "mkdir -p "+filepath.Join(appDir, "data")) {
+		t.Fatalf("error = %v, want instruction to replace the data file with a directory", err)
+	}
+}
+
+func TestResolveStaticAppWithoutDataDirectory(t *testing.T) {
+	appDir := makeApp(t, map[string]testFile{"index.html": {body: "hello"}})
+	if err := os.Remove(filepath.Join(appDir, "data")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResolveAppWithRuntimeSandbox(context.Background(), appDir, nil, true); err != nil {
+		t.Fatalf("static app without data: %v", err)
+	}
+}
+
 func TestCommandForRejectsStaticTCPTransport(t *testing.T) {
 	_, err := commandFor(app{kind: staticApp, root: "."}, transport{kind: "tcp", listen: "127.0.0.1:8080"})
 	if err == nil || !strings.Contains(err.Error(), "only supports Unix sockets") {
@@ -341,7 +390,7 @@ func TestExecutableAppRuntimeSandboxesUseUnrestrictedNetwork(t *testing.T) {
 	}
 }
 
-func TestResolveAppDefaultsHomeWithoutDataDirectory(t *testing.T) {
+func TestResolveAppDefaultsHomeToDataDirectory(t *testing.T) {
 	appDir := makeApp(t, map[string]testFile{"main.ts": {body: "console.log('hello')\n"}})
 
 	resolved, err := ResolveAppWithRuntimeSandbox(context.Background(), appDir, map[string]string{"REVERSE_BIN_PORT": "7777"}, false)
@@ -393,6 +442,9 @@ func TestResolveAppRuntimeSandbox(t *testing.T) {
 func makeApp(t *testing.T, files map[string]testFile) string {
 	t.Helper()
 	appDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(appDir, "data"), 0o755); err != nil {
+		t.Fatalf("mkdir data: %v", err)
+	}
 	for name, f := range files {
 		mode := f.mode
 		if mode == 0 {

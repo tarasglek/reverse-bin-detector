@@ -14,6 +14,9 @@ import (
 
 func TestCLIPythonSocketAppOutput(t *testing.T) {
 	appDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(appDir, "data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	mainPy := filepath.Join(appDir, "main.py")
 	if err := os.WriteFile(mainPy, []byte("#!/usr/bin/env python3\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -44,6 +47,18 @@ func TestCLIStaticUnixAppOutput(t *testing.T) {
 	}
 }
 
+func TestCLIDenoWithoutDataExplainsFix(t *testing.T) {
+	appDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(appDir, "main.ts"), []byte("export default {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("go", "run", ".", "--allow-unsafe-no-landlock", "--no-runtime-sandbox", appDir)
+	out, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "mkdir -p "+filepath.Join(appDir, "data")) {
+		t.Fatalf("error = %v, output = %q; want missing data diagnostic", err, out)
+	}
+}
+
 func TestCLIInvalidAppExitsNonZero(t *testing.T) {
 	appDir := t.TempDir()
 	cmd := exec.Command("go", "run", ".", "--allow-unsafe-no-landlock", "--no-runtime-sandbox", appDir)
@@ -70,6 +85,9 @@ func requireAsAppBinary(t *testing.T, binDir string) string {
 func sbAppDir(t *testing.T) string {
 	t.Helper()
 	appDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(appDir, "data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(appDir, "main.py"), []byte("#!/usr/bin/env python3\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -101,6 +119,9 @@ func TestAsApp(t *testing.T) {
 		root := t.TempDir()
 		appDir := filepath.Join(root, "app")
 		if err := os.Mkdir(appDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(filepath.Join(appDir, "data"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(appDir, "main.py"), []byte("#!/usr/bin/env python3\n"), 0o755); err != nil {
@@ -151,9 +172,6 @@ func TestAsApp(t *testing.T) {
 	t.Run("data writable", func(t *testing.T) {
 		appDir := sbAppDir(t)
 		dataDir := filepath.Join(appDir, "data")
-		if err := os.Mkdir(dataDir, 0o755); err != nil {
-			t.Fatal(err)
-		}
 		path := filepath.Join(dataDir, "wrote.txt")
 		if _, stderr, err := run(appDir, "touch", path); err != nil {
 			t.Fatalf("data write failed: %v\nstderr: %s", err, stderr)
