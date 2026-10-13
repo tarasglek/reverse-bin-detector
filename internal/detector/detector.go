@@ -102,6 +102,11 @@ func Run(ctx context.Context, args []string, stdout io.Writer) error {
 	return emitPlan(ctx, opts, stdout)
 }
 
+// RunAsApp replaces the current process with command inside appDir's runtime sandbox.
+func RunAsApp(ctx context.Context, appDir string, command []string) error {
+	return runAsApp(ctx, cliOptions{appDir: appDir, command: command})
+}
+
 func runAsApp(ctx context.Context, opts cliOptions) error {
 	executable, err := os.Executable()
 	if err != nil {
@@ -112,6 +117,8 @@ func runAsApp(ctx context.Context, opts cliOptions) error {
 		args = append([]string{"--allow-unsafe-no-landlock"}, args...)
 	}
 	cmd := exec.CommandContext(ctx, executable, append(args, opts.command...)...)
+	// Aliases such as rb-ssh dispatch on argv[0]; the plan helper is always the detector CLI.
+	cmd.Args[0] = "reverse-bin-detector"
 	cmd.Stderr = os.Stderr
 	output, err := cmd.Output()
 	if err != nil {

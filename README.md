@@ -43,6 +43,16 @@ Non-interactive (e.g. does the app's runtime allow this?):
 
 Full production example (sudo, service identity, keys): see **reverse-bin-hosting README → "Interactive sandbox shells"**.
 
+### Per-app SSH (`rb-ssh`)
+
+Invoked through an `rb-ssh` symlink, the detector maps an SSH key to an app sandbox. Each `authorized_keys` line names its app:
+
+```
+restrict,pty,command="/usr/lib/reverse-bin/rb-ssh todo" ssh-ed25519 AAAA... todo
+```
+
+`rb-ssh` is also the service user's login shell, so it accepts only `rb-ssh APP` or `rb-ssh -c "<dir>/rb-ssh APP"` and refuses anything else. No `SSH_ORIGINAL_COMMAND` starts `bash -i`; otherwise it runs `sh -c "$SSH_ORIGINAL_COMMAND"`. sftp and scp are refused. `PATH`, the apps root, and the age key path are compiled in, not taken from the session. Packaging lives in reverse-bin-hosting.
+
 ## Build/check
 
 ```sh
