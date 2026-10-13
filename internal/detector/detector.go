@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/tarasglek/caddy-reverse-bin/detectorschema"
 	"github.com/tarasglek/reverse-bin-detector/internal/sandbox"
@@ -123,22 +124,43 @@ func runAsApp(ctx context.Context, opts cliOptions) error {
 	return executeAsAppPlan(plan)
 }
 
-func executeAsAppPlan(plan *detectorschema.DetectorOutput) error {
+// asAppExec is the process image executeAsAppPlan replaces the detector with.
+type asAppExec struct {
+	path string
+	argv []string
+	env  []string
+	dir  string
+}
+
+func prepareAsAppExec(plan *detectorschema.DetectorOutput) (asAppExec, error) {
 	if plan == nil || plan.Executable == nil || len(*plan.Executable) == 0 {
-		return fmt.Errorf("as-app plan missing executable")
+		return asAppExec{}, fmt.Errorf("as-app plan missing executable")
 	}
 	if plan.WorkingDirectory == nil || *plan.WorkingDirectory == "" {
-		return fmt.Errorf("as-app plan missing working directory")
+		return asAppExec{}, fmt.Errorf("as-app plan missing working directory")
 	}
-	cmd := exec.Command((*plan.Executable)[0], (*plan.Executable)[1:]...)
-	cmd.Dir = *plan.WorkingDirectory
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	path, err := exec.LookPath((*plan.Executable)[0])
+	if err != nil {
+		return asAppExec{}, fmt.Errorf("as-app plan executable: %w", err)
+	}
+	env := os.Environ()
 	if plan.Envs != nil {
-		cmd.Env = *plan.Envs
+		env = *plan.Envs
 	}
-	return cmd.Run()
+	return asAppExec{path: path, argv: *plan.Executable, env: env, dir: *plan.WorkingDirectory}, nil
+}
+
+// executeAsAppPlan execs the sandbox instead of supervising it, so signals and
+// session hangups reach the sandbox directly and cannot orphan it.
+func executeAsAppPlan(plan *detectorschema.DetectorOutput) error {
+	exe, err := prepareAsAppExec(plan)
+	if err != nil {
+		return err
+	}
+	if err := os.Chdir(exe.dir); err != nil {
+		return fmt.Errorf("as-app working directory: %w", err)
+	}
+	return syscall.Exec(exe.path, exe.argv, exe.env)
 }
 
 func emitPlan(ctx context.Context, opts cliOptions, stdout io.Writer) error {

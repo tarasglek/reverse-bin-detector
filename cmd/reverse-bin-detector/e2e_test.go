@@ -3,11 +3,15 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/tarasglek/caddy-reverse-bin/detectorschema"
 )
@@ -181,6 +185,28 @@ func TestAsApp(t *testing.T) {
 		}
 	})
 
+	t.Run("hangup leaves no sandbox behind", func(t *testing.T) {
+		// A unique sleep duration identifies this test's sandboxed process.
+		duration := fmt.Sprintf("3600.%06d", os.Getpid())
+		pattern := "^sleep " + regexp.QuoteMeta(duration) + "$"
+		t.Cleanup(func() { _ = exec.Command("pkill", "-KILL", "-f", pattern).Run() })
+
+		cmd := exec.Command(bin, "--as-app", sbAppDir(t), "--", "sleep", duration)
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		if !waitFor(func() bool { return exec.Command("pgrep", "-f", pattern).Run() == nil }) {
+			t.Fatal("sandboxed sleep never started")
+		}
+		if err := cmd.Process.Signal(syscall.SIGHUP); err != nil {
+			t.Fatal(err)
+		}
+		_ = cmd.Wait()
+		if !waitFor(func() bool { return exec.Command("pgrep", "-f", pattern).Run() != nil }) {
+			t.Fatal("sandboxed process survived SIGHUP to --as-app")
+		}
+	})
+
 	t.Run("interactive home", func(t *testing.T) {
 		appDir := sbAppDir(t)
 		stdout, stderr, err := run(appDir, "bash", "-i", "-c", "echo HOME=$HOME")
@@ -195,6 +221,15 @@ func TestAsApp(t *testing.T) {
 			t.Fatalf("interactive shell touched a user rc file: %s", stderr)
 		}
 	})
+}
+
+func waitFor(cond func() bool) bool {
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		if cond() {
+			return true
+		}
+	}
+	return false
 }
 
 func runDetectorOK(t *testing.T, appDir string) *detectorschema.DetectorOutput {

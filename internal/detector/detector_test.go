@@ -57,20 +57,27 @@ func TestExecuteAsAppPlanRejectsMissingExecutable(t *testing.T) {
 	}
 }
 
-func TestExecuteAsAppPlanReturnsExitError(t *testing.T) {
+func TestPrepareAsAppExecResolvesPlan(t *testing.T) {
 	workingDirectory := t.TempDir()
 	executable := []string{"sh", "-c", "exit 42"}
-	envs := os.Environ()
+	envs := []string{"ONLY=this"}
 	plan := &detectorschema.DetectorOutput{
 		Executable:       &executable,
 		WorkingDirectory: &workingDirectory,
 		Envs:             &envs,
 	}
 
-	err := executeAsAppPlan(plan)
-	exitErr, ok := err.(*exec.ExitError)
-	if !ok || exitErr.ExitCode() != 42 {
-		t.Fatalf("error = %T %v, want exit code 42", err, err)
+	got, err := prepareAsAppExec(plan)
+	if err != nil {
+		t.Fatalf("prepareAsAppExec: %v", err)
+	}
+	wantPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := asAppExec{path: wantPath, argv: executable, env: envs, dir: workingDirectory}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("prepareAsAppExec = %#v, want %#v", got, want)
 	}
 }
 
