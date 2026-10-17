@@ -51,18 +51,6 @@ func TestCLIStaticUnixAppOutput(t *testing.T) {
 	}
 }
 
-func TestCLIDenoWithoutDataExplainsFix(t *testing.T) {
-	appDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(appDir, "main.ts"), []byte("export default {}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command("go", "run", ".", "--allow-unsafe-no-landlock", "--no-runtime-sandbox", appDir)
-	out, err := cmd.CombinedOutput()
-	if err == nil || !strings.Contains(string(out), "mkdir -p "+filepath.Join(appDir, "data")) {
-		t.Fatalf("error = %v, output = %q; want missing data diagnostic", err, out)
-	}
-}
-
 func TestCLIInvalidAppExitsNonZero(t *testing.T) {
 	appDir := t.TempDir()
 	cmd := exec.Command("go", "run", ".", "--allow-unsafe-no-landlock", "--no-runtime-sandbox", appDir)
@@ -182,6 +170,17 @@ func TestAsApp(t *testing.T) {
 		}
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("stat written file: %v", err)
+		}
+	})
+
+	t.Run("no data directory runs read-only", func(t *testing.T) {
+		appDir := sbAppDir(t)
+		if err := os.Remove(filepath.Join(appDir, "data")); err != nil {
+			t.Fatal(err)
+		}
+		stdout, stderr, err := run(appDir, "sh", "-c", "head -c2 main.py && ! touch new.txt 2>/dev/null")
+		if err != nil || stdout != "#!" {
+			t.Fatalf("as-app without data: %v\nstdout: %q\nstderr: %s", err, stdout, stderr)
 		}
 	})
 

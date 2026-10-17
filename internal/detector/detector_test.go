@@ -2,6 +2,7 @@ package detector
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -258,7 +259,9 @@ func TestResolveAppBehavior(t *testing.T) {
 	}
 }
 
-func TestResolveExecutableAppRequiresDataDirectory(t *testing.T) {
+// Apps without a data/ directory run read-only: the plan never grants write
+// access to a missing or non-directory data path.
+func TestResolveAppWithoutDataDirectoryRunsReadOnly(t *testing.T) {
 	for _, tt := range []struct {
 		name  string
 		files map[string]testFile
@@ -267,43 +270,29 @@ func TestResolveExecutableAppRequiresDataDirectory(t *testing.T) {
 		{"deno", map[string]testFile{"main.ts": {body: "export default {}\n"}}, map[string]string{"REVERSE_BIN_PORT": "7777"}},
 		{"python", map[string]testFile{"main.py": {body: "#!/usr/bin/env python3\n", mode: 0o755}}, nil},
 		{"explicit", nil, map[string]string{"REVERSE_BIN_COMMAND": "server", "REVERSE_BIN_PORT": "7777"}},
+		{"static", map[string]testFile{"index.html": {body: "hello"}}, nil},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			appDir := makeApp(t, tt.files)
-			if err := os.Remove(filepath.Join(appDir, "data")); err != nil {
-				t.Fatal(err)
-			}
-			for _, sandboxed := range []bool{false, true} {
-				_, err := ResolveAppWithRuntimeSandbox(context.Background(), appDir, tt.env, sandboxed)
-				if err == nil || !strings.Contains(err.Error(), "mkdir -p "+filepath.Join(appDir, "data")) {
-					t.Fatalf("sandboxed=%t: error = %v, want mkdir instruction", sandboxed, err)
+		for _, dataIsFile := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/data-file=%t", tt.name, dataIsFile), func(t *testing.T) {
+				appDir := makeApp(t, tt.files)
+				dataDir := filepath.Join(appDir, "data")
+				if err := os.Remove(dataDir); err != nil {
+					t.Fatal(err)
 				}
-			}
-		})
-	}
-}
-
-func TestResolveAppRejectsDataFile(t *testing.T) {
-	appDir := makeApp(t, map[string]testFile{"main.ts": {body: "export default {}\n"}})
-	if err := os.Remove(filepath.Join(appDir, "data")); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(appDir, "data"), nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	_, err := ResolveApp(context.Background(), appDir, map[string]string{"REVERSE_BIN_PORT": "7777"})
-	if err == nil || !strings.Contains(err.Error(), "is not a directory") || !strings.Contains(err.Error(), "mkdir -p "+filepath.Join(appDir, "data")) {
-		t.Fatalf("error = %v, want instruction to replace the data file with a directory", err)
-	}
-}
-
-func TestResolveStaticAppWithoutDataDirectory(t *testing.T) {
-	appDir := makeApp(t, map[string]testFile{"index.html": {body: "hello"}})
-	if err := os.Remove(filepath.Join(appDir, "data")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ResolveAppWithRuntimeSandbox(context.Background(), appDir, nil, true); err != nil {
-		t.Fatalf("static app without data: %v", err)
+				if dataIsFile {
+					if err := os.WriteFile(dataDir, nil, 0o644); err != nil {
+						t.Fatal(err)
+					}
+				}
+				resolved, err := ResolveAppWithRuntimeSandbox(context.Background(), appDir, tt.env, true)
+				if err != nil {
+					t.Fatalf("app without data directory: %v", err)
+				}
+				if hasOptionValue(*resolved.Executable, "--rw", dataDir) {
+					t.Fatalf("plan grants write access to missing data directory: %q", *resolved.Executable)
+				}
+			})
+		}
 	}
 }
 
