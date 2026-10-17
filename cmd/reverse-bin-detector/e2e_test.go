@@ -36,7 +36,7 @@ func TestCLIPythonSocketAppOutput(t *testing.T) {
 	}
 }
 
-func TestCLIPublicURL(t *testing.T) {
+func TestCLIPublicHost(t *testing.T) {
 	appDir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(appDir, "data"), 0o755); err != nil {
 		t.Fatal(err)
@@ -45,15 +45,18 @@ func TestCLIPublicURL(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	envs := *runDetectorOK(t, appDir, "--public-url=https://demo.example.test/").Envs
-	for _, want := range []string{"REVERSE_BIN_PUBLIC_URL=https://demo.example.test", "REVERSE_BIN_PUBLIC_HOST=demo.example.test"} {
-		if !slices.Contains(envs, want) {
-			t.Fatalf("Envs missing %q: %#v", want, envs)
+	envs := *runDetectorOK(t, appDir, "--public-host=demo.example.test").Envs
+	if !slices.Contains(envs, "REVERSE_BIN_PUBLIC_HOST=demo.example.test") {
+		t.Fatalf("Envs missing REVERSE_BIN_PUBLIC_HOST: %#v", envs)
+	}
+	for _, env := range envs {
+		if strings.HasPrefix(env, "REVERSE_BIN_PUBLIC_URL=") {
+			t.Fatalf("Envs still contain %q", env)
 		}
 	}
 	for _, env := range *runDetectorOK(t, appDir).Envs {
 		if strings.HasPrefix(env, "REVERSE_BIN_PUBLIC_") {
-			t.Fatalf("Envs without --public-url contain %q", env)
+			t.Fatalf("Envs without --public-host contain %q", env)
 		}
 	}
 }
@@ -189,14 +192,14 @@ func TestAsApp(t *testing.T) {
 		}
 	})
 
-	t.Run("public url", func(t *testing.T) {
-		cmd := exec.Command(bin, "--public-url=https://demo.example.test", "--as-app", sbAppDir(t), "--", "sh", "-c", "printf '%s %s' \"$REVERSE_BIN_PUBLIC_URL\" \"$REVERSE_BIN_PUBLIC_HOST\"")
+	t.Run("public host", func(t *testing.T) {
+		cmd := exec.Command(bin, "--public-host=demo.localhost:9443", "--as-app", sbAppDir(t), "--", "sh", "-c", "printf '%s' \"$REVERSE_BIN_PUBLIC_HOST\"")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("as-app failed: %v\n%s", err, out)
 		}
-		if got, want := string(out), "https://demo.example.test demo.example.test"; got != want {
-			t.Fatalf("public env = %q, want %q", got, want)
+		if got, want := string(out), "demo.localhost:9443"; got != want {
+			t.Fatalf("public host = %q, want %q", got, want)
 		}
 	})
 
