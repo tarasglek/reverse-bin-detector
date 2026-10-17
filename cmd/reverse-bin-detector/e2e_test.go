@@ -51,6 +51,27 @@ func TestCLIStaticUnixAppOutput(t *testing.T) {
 	}
 }
 
+// Caddy runs the detector exactly like this: Landlock detection sandbox and
+// runtime sandbox on. An app without data/ must still get a plan, read-only.
+func TestCLIAppWithoutDataPlansReadOnly(t *testing.T) {
+	appDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(appDir, "main.ts"), []byte("export default {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("go", "run", ".", appDir)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("detector refused app without data/: %v\n%s", err, out)
+	}
+	payload, err := detectorschema.Parse(out)
+	if err != nil {
+		t.Fatalf("schema parse failed: %v\n%s", err, out)
+	}
+	if got := strings.Join(*payload.Executable, " "); strings.Contains(got, "--rw "+filepath.Join(appDir, "data")) {
+		t.Fatalf("plan grants write access to missing data/: %s", got)
+	}
+}
+
 func TestCLIInvalidAppExitsNonZero(t *testing.T) {
 	appDir := t.TempDir()
 	cmd := exec.Command("go", "run", ".", "--allow-unsafe-no-landlock", "--no-runtime-sandbox", appDir)
