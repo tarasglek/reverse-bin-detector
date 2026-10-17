@@ -39,6 +39,8 @@ const (
 	KeyReverseBinHealthMethod = "REVERSE_BIN_HEALTH_METHOD"
 	KeyReverseBinHealthPath   = "REVERSE_BIN_HEALTH_PATH"
 	KeyReverseBinHealthStatus = "REVERSE_BIN_HEALTH_STATUS"
+	KeyReverseBinPublicURL    = "REVERSE_BIN_PUBLIC_URL"
+	KeyReverseBinPublicHost   = "REVERSE_BIN_PUBLIC_HOST"
 )
 
 type cliOptions struct {
@@ -47,6 +49,7 @@ type cliOptions struct {
 	showVersion           bool
 	asApp                 bool
 	asAppPlan             bool
+	publicURL             string
 	appDir                string
 	command               []string
 }
@@ -60,6 +63,7 @@ func parseCLIArgs(args []string) (cliOptions, error) {
 	fs.BoolVar(&opts.showVersion, "version", false, "print version and exit")
 	fs.BoolVar(&opts.asApp, "as-app", false, "execute command with app runtime sandbox")
 	fs.BoolVar(&opts.asAppPlan, "as-app-plan", false, "")
+	fs.StringVar(&opts.publicURL, "public-url", "", "canonical public origin of the app, e.g. https://app.example.com")
 	if err := fs.Parse(args); err != nil {
 		return cliOptions{}, err
 	}
@@ -72,11 +76,11 @@ func parseCLIArgs(args []string) (cliOptions, error) {
 	}
 	if opts.asApp || opts.asAppPlan {
 		if len(rest) < 3 || rest[1] != "--" || rest[0] == "" || opts.noRuntimeSandbox {
-			return cliOptions{}, fmt.Errorf("usage: reverse-bin-detector --as-app APP_DIR -- COMMAND [ARGS...]")
+			return cliOptions{}, fmt.Errorf("usage: reverse-bin-detector [--public-url=URL] --as-app APP_DIR -- COMMAND [ARGS...]")
 		}
 		opts.command = append([]string(nil), rest[2:]...)
 	} else if len(rest) != 1 {
-		return cliOptions{}, fmt.Errorf("usage: reverse-bin-detector [--allow-unsafe-no-landlock] APP_DIR\n       reverse-bin-detector --as-app APP_DIR -- COMMAND [ARGS...]")
+		return cliOptions{}, fmt.Errorf("usage: reverse-bin-detector [--allow-unsafe-no-landlock] [--public-url=URL] APP_DIR\n       reverse-bin-detector [--public-url=URL] --as-app APP_DIR -- COMMAND [ARGS...]")
 	}
 	appDir, err := filepath.Abs(rest[0])
 	if err != nil {
@@ -115,6 +119,9 @@ func runAsApp(ctx context.Context, opts cliOptions) error {
 	args := []string{"--as-app-plan", opts.appDir, "--"}
 	if opts.allowUnsafeNoLandlock {
 		args = append([]string{"--allow-unsafe-no-landlock"}, args...)
+	}
+	if opts.publicURL != "" {
+		args = append([]string{"--public-url=" + opts.publicURL}, args...)
 	}
 	cmd := exec.CommandContext(ctx, executable, append(args, opts.command...)...)
 	// Aliases such as rb-ssh dispatch on argv[0]; the plan helper is always the detector CLI.
@@ -179,6 +186,9 @@ func emitPlan(ctx context.Context, opts cliOptions, stdout io.Writer) error {
 	}
 	env, err := LoadAppEnv(ctx, appDir)
 	if err != nil {
+		return err
+	}
+	if err := applyPublicURL(env, opts.publicURL); err != nil {
 		return err
 	}
 	var out detectorschema.DetectorOutput

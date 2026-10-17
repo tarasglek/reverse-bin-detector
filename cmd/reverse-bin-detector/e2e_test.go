@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -32,6 +33,28 @@ func TestCLIPythonSocketAppOutput(t *testing.T) {
 	}
 	if !strings.HasPrefix(*payload.ReverseProxyTo, "unix/") || !strings.HasSuffix(*payload.ReverseProxyTo, "/data/reverse-bin.sock") {
 		t.Fatalf("ReverseProxyTo = %q", *payload.ReverseProxyTo)
+	}
+}
+
+func TestCLIPublicURL(t *testing.T) {
+	appDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(appDir, "data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "main.py"), []byte("#!/usr/bin/env python3\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	envs := *runDetectorOK(t, appDir, "--public-url=https://demo.example.test/").Envs
+	for _, want := range []string{"REVERSE_BIN_PUBLIC_URL=https://demo.example.test", "REVERSE_BIN_PUBLIC_HOST=demo.example.test"} {
+		if !slices.Contains(envs, want) {
+			t.Fatalf("Envs missing %q: %#v", want, envs)
+		}
+	}
+	for _, env := range *runDetectorOK(t, appDir).Envs {
+		if strings.HasPrefix(env, "REVERSE_BIN_PUBLIC_") {
+			t.Fatalf("Envs without --public-url contain %q", env)
+		}
 	}
 }
 
@@ -166,6 +189,17 @@ func TestAsApp(t *testing.T) {
 		}
 	})
 
+	t.Run("public url", func(t *testing.T) {
+		cmd := exec.Command(bin, "--public-url=https://demo.example.test", "--as-app", sbAppDir(t), "--", "sh", "-c", "printf '%s %s' \"$REVERSE_BIN_PUBLIC_URL\" \"$REVERSE_BIN_PUBLIC_HOST\"")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("as-app failed: %v\n%s", err, out)
+		}
+		if got, want := string(out), "https://demo.example.test demo.example.test"; got != want {
+			t.Fatalf("public env = %q, want %q", got, want)
+		}
+	})
+
 	t.Run("exit status", func(t *testing.T) {
 		_, _, err := run(sbAppDir(t), "sh", "-c", "exit 42")
 		exitErr, ok := err.(*exec.ExitError)
@@ -252,9 +286,10 @@ func waitFor(cond func() bool) bool {
 	return false
 }
 
-func runDetectorOK(t *testing.T, appDir string) *detectorschema.DetectorOutput {
+func runDetectorOK(t *testing.T, appDir string, flags ...string) *detectorschema.DetectorOutput {
 	t.Helper()
-	cmd := exec.Command("go", "run", ".", "--allow-unsafe-no-landlock", "--no-runtime-sandbox", appDir)
+	args := append([]string{"run", ".", "--allow-unsafe-no-landlock", "--no-runtime-sandbox"}, flags...)
+	cmd := exec.Command("go", append(args, appDir)...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("detector failed: %v\n%s", err, out)

@@ -7,6 +7,7 @@ Detect app kind, build env, generate sandbox launch plan for [reverse-bin-hostin
 - Read app dir: `.env` or SOPS `secrets.enc.json`
 - Detect kind: deno, python, static, explicit `REVERSE_BIN_COMMAND`
 - Emit landrun/namespace launch JSON for Caddy
+- With `--public-url=https://app.example.com`, inject `REVERSE_BIN_PUBLIC_URL` (origin) and `REVERSE_BIN_PUBLIC_HOST` (hostname) unless the app env sets them; use for CSRF origins, allowed hosts, OAuth redirects, absolute links
 
 Full docs: **reverse-bin-hosting README** — https://github.com/tarasglek/reverse-bin-hosting
 
@@ -21,6 +22,7 @@ make build          # or: go build ./cmd/reverse-bin-detector
 
 ```sh
 ./reverse-bin-detector ~/apps/demo | jq
+./reverse-bin-detector --public-url=https://demo.example.com ~/apps/demo | jq .envs
 ```
 
 ## `--as-app`: run a command as an app
