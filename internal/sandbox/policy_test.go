@@ -49,31 +49,36 @@ func TestEtcSymlinkGrants(t *testing.T) {
 	targetDir := t.TempDir()
 	target := filepath.Join(targetDir, "stub-resolv.conf")
 	writeSandboxTestFile(t, target, "nameserver 127.0.0.53\n")
-	tmpFile, err := os.CreateTemp("", "sandbox-broad-*")
+	// Explicit /tmp so the parent is exactly a broadDirs entry regardless of $TMPDIR.
+	tmpFile, err := os.CreateTemp("/tmp", "sandbox-broad-*")
 	if err != nil {
 		t.Fatal(err)
 	}
 	tmpFile.Close()
 	t.Cleanup(func() { os.Remove(tmpFile.Name()) })
-	appFile := filepath.Join(appDir, "resolv.conf")
-	writeSandboxTestFile(t, appFile, "nameserver 127.0.0.53\n")
 
 	tests := []struct {
 		name   string
+		appDir string // defaults to appDir
 		link   string // symlink target; "" means regular file
 		static bool
 		want   []string
 	}{
-		{name: "symlink outside grants adds parent", link: target, want: []string{targetDir}},
+		{name: "sibling of app dir adds parent", link: target, want: []string{targetDir}},
 		{name: "regular file adds nothing"},
 		{name: "symlink into /usr adds nothing", link: "/usr/share/zoneinfo/UTC"},
 		{name: "broken symlink adds nothing", link: filepath.Join(targetDir, "missing")},
-		{name: "broad parent refused", link: tmpFile.Name()},
-		{name: "app dir parent refused", link: appFile},
+		// appDir must not be under /tmp, or the app-dir guard would refuse it first.
+		{name: "broad parent refused", appDir: "/apps/demo", link: tmpFile.Name()},
+		{name: "app dir ancestor refused", appDir: filepath.Join(targetDir, "app"), link: target},
 		{name: "static app adds nothing", link: target, static: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			app := tt.appDir
+			if app == "" {
+				app = appDir
+			}
 			etcDir := t.TempDir()
 			resolv := filepath.Join(etcDir, "resolv.conf")
 			if tt.link == "" {
@@ -81,15 +86,15 @@ func TestEtcSymlinkGrants(t *testing.T) {
 			} else if err := os.Symlink(tt.link, resolv); err != nil {
 				t.Fatal(err)
 			}
-			p := runtimePolicy(appDir, tt.static, "", etcDir)
+			p := runtimePolicy(app, tt.static, "", etcDir)
 			if got := extraGrants(p.readOnly, "/etc", "/sys"); !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("runtime extra read-only grants = %#v, want %#v", got, tt.want)
 			}
 			if tt.static {
 				return
 			}
-			d := detectionPolicy(appDir, nil, etcDir)
-			if got := extraGrants(d.readOnly, appDir, "/dev/null", "/bin", "/usr", "/lib", "/lib64", "/etc"); !reflect.DeepEqual(got, tt.want) {
+			d := detectionPolicy(app, nil, etcDir)
+			if got := extraGrants(d.readOnly, app, "/dev/null", "/bin", "/usr", "/lib", "/lib64", "/etc"); !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("detection extra read-only grants = %#v, want %#v", got, tt.want)
 			}
 		})

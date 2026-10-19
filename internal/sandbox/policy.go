@@ -3,6 +3,7 @@ package sandbox
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -23,7 +24,8 @@ type Policy struct {
 var etcSymlinks = []string{"resolv.conf"}
 
 // broadDirs are never granted as symlink-target parents, no matter where a
-// symlink in /etc points.
+// symlink in /etc points. Exact match only: depth-2 parents such as
+// /run/resolvconf and /run/NetworkManager are legitimate resolv.conf homes.
 var broadDirs = []string{"/", "/run", "/var", "/tmp", "/home", "/root"}
 
 // DetectionPolicy restricts the plan-emitting detector child.
@@ -69,7 +71,7 @@ func runtimePolicy(appDir string, static bool, socketDir string, etcDir string) 
 	if !static {
 		p.readOnly = append(p.readOnly, "/sys")
 		p.unrestrictedNetwork = true
-		granted := append(append([]string(nil), p.readOnly...), p.readOnlyExec...)
+		granted := slices.Concat(p.readOnly, p.readOnlyExec)
 		p.readOnly = append(p.readOnly, etcSymlinkGrants(etcDir, appDir, granted)...)
 	}
 	return p
@@ -95,21 +97,12 @@ func etcSymlinkGrants(etcDir, appDir string, granted []string) []string {
 			continue
 		}
 		// Refuse parents that would expose the app tree or a broad system dir.
-		if underAny(appDir, []string{parent}) || isOneOf(parent, broadDirs) {
+		if underAny(appDir, []string{parent}) || slices.Contains(broadDirs, parent) {
 			continue
 		}
 		grants = append(grants, parent)
 	}
 	return grants
-}
-
-func isOneOf(dir string, dirs []string) bool {
-	for _, d := range dirs {
-		if dir == d {
-			return true
-		}
-	}
-	return false
 }
 
 // underAny reports whether path equals or is inside one of dirs.

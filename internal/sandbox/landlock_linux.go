@@ -5,6 +5,7 @@ package sandbox
 import (
 	"fmt"
 	"os"
+	"slices"
 
 	"github.com/landlock-lsm/go-landlock/landlock"
 	ll "github.com/landlock-lsm/go-landlock/landlock/syscall"
@@ -26,7 +27,7 @@ func Apply(p Policy, opts LandlockOptions) error {
 	}
 
 	var rules []landlock.Rule
-	for _, path := range append(append([]string(nil), p.readOnly...), p.readOnlyExec...) {
+	for _, path := range slices.Concat(p.readOnly, p.readOnlyExec) {
 		if rule, ok := pathRule(path, false); ok {
 			rules = append(rules, rule)
 		}
