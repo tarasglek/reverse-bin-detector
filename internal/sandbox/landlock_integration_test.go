@@ -22,7 +22,12 @@ func TestDetectionLandlockSubprocessRestrictions(t *testing.T) {
 	outsideFile := filepath.Join(outsideDir, "outside.txt")
 	writeSandboxTestFile(t, outsideFile, "secret")
 
-	for _, mode := range []string{"read-app", "write-app", "read-outside", "listen", "dial"} {
+	etcDir := t.TempDir()
+	if err := os.Symlink(outsideFile, filepath.Join(etcDir, "resolv.conf")); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, mode := range []string{"read-app", "write-app", "read-outside", "listen", "dial", "resolve-etc-symlink"} {
 		t.Run(mode, func(t *testing.T) {
 			cmd := exec.Command(os.Args[0], "-test.run=TestDetectionLandlockSubprocessHelper", "--")
 			cmd.Env = append(os.Environ(),
@@ -30,6 +35,7 @@ func TestDetectionLandlockSubprocessRestrictions(t *testing.T) {
 				"SANDBOX_MODE="+mode,
 				"SANDBOX_APP_DIR="+appDir,
 				"SANDBOX_OUTSIDE_FILE="+outsideFile,
+				"SANDBOX_ETC_DIR="+etcDir,
 			)
 			out, err := cmd.CombinedOutput()
 			text := string(out)
@@ -37,6 +43,12 @@ func TestDetectionLandlockSubprocessRestrictions(t *testing.T) {
 			case "read-app", "listen":
 				if err != nil {
 					t.Fatalf("helper failed: %v\n%s", err, text)
+				}
+			case "resolve-etc-symlink":
+				// The detection child emits the runtime plan, so it must be able to
+				// resolve /etc symlinks pointing at directories it cannot read.
+				if err != nil || strings.TrimSpace(text) != outsideDir {
+					t.Fatalf("helper = %v, output %q, want %q", err, text, outsideDir)
 				}
 			case "write-app", "read-outside", "dial":
 				if err == nil {
@@ -76,6 +88,9 @@ func TestDetectionLandlockSubprocessHelper(t *testing.T) {
 			_ = ln.Close()
 		}
 		err = listenErr
+	case "resolve-etc-symlink":
+		p := runtimePolicy(appDir, false, "", os.Getenv("SANDBOX_ETC_DIR"))
+		fmt.Println(p.readOnly[len(p.readOnly)-1])
 	case "dial":
 		dialer := net.Dialer{}
 		conn, dialErr := dialer.DialContext(context.Background(), "tcp", "127.0.0.1:9")
@@ -95,11 +110,4 @@ func TestDetectionLandlockSubprocessHelper(t *testing.T) {
 		os.Exit(3)
 	}
 	os.Exit(0)
-}
-
-func writeSandboxTestFile(t *testing.T, path, content string) {
-	t.Helper()
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
 }

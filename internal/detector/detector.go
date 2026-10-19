@@ -590,19 +590,9 @@ func wrapPIDNamespace(command []string) []string {
 }
 
 func wrapRuntimeSandbox(command []string, appDir string, tr transport, envs []string, kind appKind) []string {
-	wrapped := []string{"landrun", "--rox", "/bin,/usr,/lib,/lib64,/proc,/sys/fs/cgroup", "--ro", "/etc", "--rw", "/dev"}
+	wrapped := append([]string{"landrun"}, sandbox.LandrunArgs(sandbox.RuntimePolicy(appDir, kind == staticApp, tr.socketDir))...)
 	for _, env := range envs {
 		wrapped = append(wrapped, "--env", env)
-	}
-	if st, err := os.Stat(filepath.Join(appDir, "data")); kind != staticApp && err == nil && st.IsDir() {
-		wrapped = append(wrapped, "--rw", filepath.Join(appDir, "data"))
-	}
-	if tr.socketDir != "" {
-		wrapped = append(wrapped, "--rw", tr.socketDir)
-	}
-	wrapped = append(wrapped, "--rox", appDir)
-	if kind != staticApp {
-		wrapped = append(wrapped, "--ro", "/sys", "--unrestricted-network")
 	}
 	return append(wrapped, command...)
 }

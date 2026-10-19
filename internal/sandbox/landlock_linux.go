@@ -15,16 +15,18 @@ type LandlockOptions struct {
 }
 
 func ApplyDetection(appDir string, env map[string]string, opts LandlockOptions) error {
-	return apply(detectionPolicy(appDir, env), opts)
+	return Apply(DetectionPolicy(appDir, env), opts)
 }
 
-func apply(p policy, opts LandlockOptions) error {
+// Apply restricts the current process to p using go-landlock. Read-only and
+// read-only-exec paths are equivalent here: landlock RO rules include execute.
+func Apply(p Policy, opts LandlockOptions) error {
 	if opts.AllowUnsafeNoLandlock {
 		return nil
 	}
 
 	var rules []landlock.Rule
-	for _, path := range p.readOnly {
+	for _, path := range append(append([]string(nil), p.readOnly...), p.readOnlyExec...) {
 		if rule, ok := pathRule(path, false); ok {
 			rules = append(rules, rule)
 		}

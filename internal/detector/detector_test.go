@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/tarasglek/caddy-reverse-bin/detectorschema"
+	"github.com/tarasglek/reverse-bin-detector/internal/sandbox"
 )
 
 type testFile struct {
@@ -432,6 +433,26 @@ func TestResolveAppRuntimeSandbox(t *testing.T) {
 	}
 	if len(*plain.Executable) == 0 || (*plain.Executable)[0] == "landrun" {
 		t.Fatalf("NoRuntimeSandbox executable = %#v, want unwrapped", *plain.Executable)
+	}
+}
+
+func TestRuntimeSandboxArgsComeFromSandboxPolicy(t *testing.T) {
+	appDir := makeApp(t, map[string]testFile{"main.ts": {body: "console.log('hello')\n"}})
+	resolved, err := ResolveAppWithRuntimeSandbox(context.Background(), appDir, map[string]string{"REVERSE_BIN_PORT": "7777"}, true)
+	if err != nil {
+		t.Fatalf("ResolveAppWithRuntimeSandbox: %v", err)
+	}
+	cmd := *resolved.Executable
+	start := 0
+	for start < len(cmd) && cmd[start] != "landrun" {
+		start++
+	}
+	want := sandbox.LandrunArgs(sandbox.RuntimePolicy(appDir, false, ""))
+	if start+1+len(want) > len(cmd) || !reflect.DeepEqual(cmd[start+1:start+1+len(want)], want) {
+		t.Fatalf("landrun args = %#v, want prefix %#v", cmd[start+1:], want)
+	}
+	if cmd[start+1+len(want)] != "--env" {
+		t.Fatalf("after policy args got %q, want --env", cmd[start+1+len(want)])
 	}
 }
 
