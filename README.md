@@ -25,35 +25,30 @@ make build          # or: go build ./cmd/reverse-bin-detector
 ./reverse-bin-detector --public-host=demo.example.com ~/apps/demo | jq .envs
 ```
 
-## `--as-app`: run a command as an app
+## `--as-app` / `--as-app-dev`: run a command as an app
 
-`--as-app` runs a command with the detector-generated app sandbox, environment, and working directory.
-
-Shell in (interactive):
-
-```sh
-./reverse-bin-detector --as-app ~/apps/demo -- /bin/bash -i
-```
-
-Non-interactive (e.g. does the app's runtime allow this?):
+Both run `COMMAND` with the sandbox, environment, and working directory the
+detector generates for the app. `--as-app` is the production sandbox: source
+read-only, `data/` writable. `--as-app-dev` is the same sandbox with the app
+source writable, for editing and `git push`; development only.
 
 ```sh
-./reverse-bin-detector --as-app ~/apps/demo -- curl https://example.com
-./reverse-bin-detector --as-app ~/apps/demo -- sh -c 'wget -q -O- http://127.0.0.1; echo rc=$?'
 ./reverse-bin-detector --as-app ~/apps/demo -- deno test
+./reverse-bin-detector --as-app ~/apps/demo -- sh -c 'wget -q -O- http://127.0.0.1; echo rc=$?'
+./reverse-bin-detector --as-app-dev ~/apps/demo -- /bin/bash -i
 ```
 
-Full production example (sudo, service identity, keys): see **reverse-bin-hosting README → "Interactive sandbox shells"**.
+Production example (sudo, service identity, keys): see **reverse-bin-hosting README → "Interactive sandbox shells"**.
 
 ### Per-app SSH (`rb-ssh`)
 
-Invoked through an `rb-ssh` symlink, the detector maps an SSH key to an app sandbox. Each `authorized_keys` line names its app:
+Invoked through an `rb-ssh` symlink, the detector maps an SSH key to an app and runs the session as `--as-app-dev` (source writable). Each `authorized_keys` line names its app:
 
 ```
 restrict,pty,command="/usr/lib/reverse-bin/rb-ssh todo" ssh-ed25519 AAAA... todo
 ```
 
-`rb-ssh` is also the service user's login shell, so it accepts only `rb-ssh APP` or `rb-ssh -c "<dir>/rb-ssh APP"` and refuses anything else. No `SSH_ORIGINAL_COMMAND` starts `bash -i`; otherwise it runs `sh -c "$SSH_ORIGINAL_COMMAND"`. sftp and scp are refused. `PATH`, the apps root, and the age key path are compiled in, not taken from the session. Packaging lives in reverse-bin-hosting.
+`rb-ssh` is also the service user's login shell, so it accepts only `rb-ssh APP` or `rb-ssh -c "<dir>/rb-ssh APP"` and refuses anything else. No `SSH_ORIGINAL_COMMAND` starts `bash -i`; otherwise it runs `sh -c "$SSH_ORIGINAL_COMMAND"`, which is how `git push reverse-bin@host:.` reaches `git-receive-pack` inside the sandbox. sftp and scp are refused. `PATH`, the apps root, and the age key path are compiled in, not taken from the session. Packaging lives in reverse-bin-hosting.
 
 ## Build/check
 
