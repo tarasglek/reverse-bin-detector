@@ -78,10 +78,49 @@ func TestRBSSH(t *testing.T) {
 		}
 	})
 
-	t.Run("source read only", func(t *testing.T) {
-		_, _, err := run("", []string{"SSH_ORIGINAL_COMMAND=touch " + filepath.Join(appDir, "x")}, "todo")
-		if _, ok := err.(*exec.ExitError); !ok {
-			t.Fatalf("error = %T %v, want denied write", err, err)
+	t.Run("source writable", func(t *testing.T) {
+		path := filepath.Join(appDir, "x")
+		if _, stderr, err := run("", []string{"SSH_ORIGINAL_COMMAND=touch " + path}, "todo"); err != nil {
+			t.Fatalf("source write failed: %v\nstderr: %s", err, stderr)
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("stat written file: %v", err)
+		}
+	})
+
+	t.Run("git push updates the checkout", func(t *testing.T) {
+		// Stand in for ssh: sshd would set SSH_ORIGINAL_COMMAND and run the forced command.
+		// GIT_SSH_COMMAND, which go test exports, overrides core.sshCommand.
+		sshStub := filepath.Join(t.TempDir(), "ssh")
+		stub := "#!/bin/sh\nshift\nSSH_ORIGINAL_COMMAND=\"$*\" exec " + bin + " todo\n"
+		if err := os.WriteFile(sshStub, []byte(stub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		git := func(dir string, args ...string) {
+			t.Helper()
+			cmd := exec.Command("git", args...)
+			cmd.Dir = dir
+			cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND="+sshStub, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v\n%s", args, err, out)
+			}
+		}
+		git(appDir, "init", "-q", "-b", "main")
+		git(appDir, "config", "receive.denyCurrentBranch", "updateInstead")
+		git(appDir, "add", "main.py")
+		git(appDir, "commit", "-q", "-m", "init")
+
+		clone := filepath.Join(t.TempDir(), "clone")
+		git("", "clone", "-q", appDir, clone)
+		if err := os.WriteFile(filepath.Join(clone, "pushed.txt"), []byte("pushed\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		git(clone, "add", "pushed.txt")
+		git(clone, "commit", "-q", "-m", "push")
+
+		git(clone, "-c", "ssh.variant=simple", "push", "-q", "reverse-bin@host:.", "main")
+		if got, err := os.ReadFile(filepath.Join(appDir, "pushed.txt")); err != nil || string(got) != "pushed\n" {
+			t.Fatalf("pushed.txt = %q, %v; want checkout updated", got, err)
 		}
 	})
 

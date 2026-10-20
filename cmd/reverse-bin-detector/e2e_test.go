@@ -219,6 +219,18 @@ func TestAsApp(t *testing.T) {
 		}
 	})
 
+	t.Run("dev source writable", func(t *testing.T) {
+		appDir := sbAppDir(t)
+		path := filepath.Join(appDir, "edited.txt")
+		out, err := exec.Command(bin, "--as-app-dev", appDir, "--", "touch", path).CombinedOutput()
+		if err != nil {
+			t.Fatalf("as-app-dev source write failed: %v\n%s", err, out)
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("stat written file: %v", err)
+		}
+	})
+
 	t.Run("data writable", func(t *testing.T) {
 		appDir := sbAppDir(t)
 		dataDir := filepath.Join(appDir, "data")

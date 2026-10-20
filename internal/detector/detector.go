@@ -48,6 +48,7 @@ type cliOptions struct {
 	showVersion           bool
 	asApp                 bool
 	asAppPlan             bool
+	writableSource        bool
 	publicHost            string
 	appDir                string
 	command               []string
@@ -62,6 +63,8 @@ func parseCLIArgs(args []string) (cliOptions, error) {
 	fs.BoolVar(&opts.showVersion, "version", false, "print version and exit")
 	fs.BoolVar(&opts.asApp, "as-app", false, "execute command with app runtime sandbox")
 	fs.BoolVar(&opts.asAppPlan, "as-app-plan", false, "")
+	asAppDev := fs.Bool("as-app-dev", false, "like --as-app, with app source writable (dev sessions)")
+	fs.BoolVar(&opts.writableSource, "writable-source", false, "")
 	fs.StringVar(&opts.publicHost, "public-host", "", "canonical public host[:port] of the app, served as https://; e.g. app.example.com")
 	if err := fs.Parse(args); err != nil {
 		return cliOptions{}, err
@@ -70,16 +73,25 @@ func parseCLIArgs(args []string) (cliOptions, error) {
 		return opts, nil
 	}
 	rest := fs.Args()
-	if opts.asApp && opts.asAppPlan {
+	modes := 0
+	for _, on := range []bool{opts.asApp, *asAppDev, opts.asAppPlan} {
+		if on {
+			modes++
+		}
+	}
+	if modes > 1 || (opts.writableSource && !opts.asAppPlan) {
 		return cliOptions{}, fmt.Errorf("as-app modes cannot be combined")
+	}
+	if *asAppDev {
+		opts.asApp, opts.writableSource = true, true
 	}
 	if opts.asApp || opts.asAppPlan {
 		if len(rest) < 3 || rest[1] != "--" || rest[0] == "" || opts.noRuntimeSandbox {
-			return cliOptions{}, fmt.Errorf("usage: reverse-bin-detector [--public-host=HOST] --as-app APP_DIR -- COMMAND [ARGS...]")
+			return cliOptions{}, fmt.Errorf("usage: reverse-bin-detector [--public-host=HOST] --as-app|--as-app-dev APP_DIR -- COMMAND [ARGS...]")
 		}
 		opts.command = append([]string(nil), rest[2:]...)
-	} else if len(rest) != 1 {
-		return cliOptions{}, fmt.Errorf("usage: reverse-bin-detector [--allow-unsafe-no-landlock] [--public-host=HOST] APP_DIR\n       reverse-bin-detector [--public-host=HOST] --as-app APP_DIR -- COMMAND [ARGS...]")
+	} else if len(rest) != 1 || opts.writableSource {
+		return cliOptions{}, fmt.Errorf("usage: reverse-bin-detector [--allow-unsafe-no-landlock] [--public-host=HOST] APP_DIR\n       reverse-bin-detector [--public-host=HOST] --as-app|--as-app-dev APP_DIR -- COMMAND [ARGS...]")
 	}
 	appDir, err := filepath.Abs(rest[0])
 	if err != nil {
@@ -105,9 +117,10 @@ func Run(ctx context.Context, args []string, stdout io.Writer) error {
 	return emitPlan(ctx, opts, stdout)
 }
 
-// RunAsApp replaces the current process with command inside appDir's runtime sandbox.
-func RunAsApp(ctx context.Context, appDir string, command []string) error {
-	return runAsApp(ctx, cliOptions{appDir: appDir, command: command})
+// RunAsAppDev replaces the current process with command inside appDir's
+// runtime sandbox with the app source writable, as --as-app-dev does.
+func RunAsAppDev(ctx context.Context, appDir string, command []string) error {
+	return runAsApp(ctx, cliOptions{appDir: appDir, command: command, writableSource: true})
 }
 
 func runAsApp(ctx context.Context, opts cliOptions) error {
@@ -116,6 +129,9 @@ func runAsApp(ctx context.Context, opts cliOptions) error {
 		return fmt.Errorf("get executable path: %w", err)
 	}
 	args := []string{"--as-app-plan", opts.appDir, "--"}
+	if opts.writableSource {
+		args = append([]string{"--writable-source"}, args...)
+	}
 	if opts.allowUnsafeNoLandlock {
 		args = append([]string{"--allow-unsafe-no-landlock"}, args...)
 	}
@@ -192,7 +208,7 @@ func emitPlan(ctx context.Context, opts cliOptions, stdout io.Writer) error {
 	}
 	var out detectorschema.DetectorOutput
 	if opts.asAppPlan {
-		out, err = resolveApp(ctx, appDir, env, opts.command, true)
+		out, err = resolveApp(ctx, appDir, env, opts.command, true, opts.writableSource)
 	} else {
 		out, err = ResolveAppWithRuntimeSandbox(ctx, appDir, env, !opts.noRuntimeSandbox)
 	}
@@ -397,10 +413,10 @@ func ResolveApp(ctx context.Context, appDir string, env map[string]string) (dete
 }
 
 func ResolveAppWithRuntimeSandbox(ctx context.Context, appDir string, env map[string]string, runtimeSandbox bool) (detectorschema.DetectorOutput, error) {
-	return resolveApp(ctx, appDir, env, nil, runtimeSandbox)
+	return resolveApp(ctx, appDir, env, nil, runtimeSandbox, false)
 }
 
-func resolveApp(ctx context.Context, appDir string, env map[string]string, customCommand []string, runtimeSandbox bool) (detectorschema.DetectorOutput, error) {
+func resolveApp(ctx context.Context, appDir string, env map[string]string, customCommand []string, runtimeSandbox, writableSource bool) (detectorschema.DetectorOutput, error) {
 	_ = ctx
 	cfg, err := LoadEnvAppConfig(env)
 	if err != nil {
@@ -423,7 +439,11 @@ func resolveApp(ctx context.Context, appDir string, env map[string]string, custo
 	}
 	envs := buildAppEnvs(appDir, env, overrides, app.kind)
 	if runtimeSandbox {
-		cmd = wrapPIDNamespace(wrapRuntimeSandbox(cmd, appDir, tr, envs, app.kind))
+		policy := sandbox.RuntimePolicy(appDir, app.kind == staticApp, tr.socketDir)
+		if writableSource {
+			policy = policy.WithWritable(appDir)
+		}
+		cmd = wrapPIDNamespace(wrapRuntimeSandbox(cmd, policy, envs))
 	}
 	return schemaOutput(cmd, appDir, envs, tr.proxy, cfg), nil
 }
@@ -589,8 +609,8 @@ func wrapPIDNamespace(command []string) []string {
 	return append(wrapped, command...)
 }
 
-func wrapRuntimeSandbox(command []string, appDir string, tr transport, envs []string, kind appKind) []string {
-	wrapped := append([]string{"landrun"}, sandbox.LandrunArgs(sandbox.RuntimePolicy(appDir, kind == staticApp, tr.socketDir))...)
+func wrapRuntimeSandbox(command []string, policy sandbox.Policy, envs []string) []string {
+	wrapped := append([]string{"landrun"}, sandbox.LandrunArgs(policy)...)
 	for _, env := range envs {
 		wrapped = append(wrapped, "--env", env)
 	}

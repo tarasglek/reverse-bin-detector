@@ -101,14 +101,32 @@ func TestEtcSymlinkGrants(t *testing.T) {
 	}
 }
 
+func TestWithWritable(t *testing.T) {
+	appDir := t.TempDir()
+	base := RuntimePolicy(appDir, false, "")
+	p := base.WithWritable(appDir)
+	assertNotContains(t, p.readOnlyExec, appDir)
+	if !reflect.DeepEqual(p.readWriteExec, []string{appDir}) {
+		t.Fatalf("readWriteExec = %#v, want [%q]", p.readWriteExec, appDir)
+	}
+	if !reflect.DeepEqual(p.readOnly, base.readOnly) || !reflect.DeepEqual(p.readWrite, base.readWrite) || p.unrestrictedNetwork != base.unrestrictedNetwork {
+		t.Fatalf("WithWritable changed other grants: %#v, base %#v", p, base)
+	}
+	if !reflect.DeepEqual(extraGrants(base.readOnlyExec, p.readOnlyExec...), []string{appDir}) {
+		t.Fatalf("readOnlyExec = %#v, want base %#v without %q", p.readOnlyExec, base.readOnlyExec, appDir)
+	}
+	assertContains(t, base.readOnlyExec, appDir)
+}
+
 func TestLandrunArgs(t *testing.T) {
 	p := Policy{
 		readOnlyExec:        []string{"/bin", "/usr"},
+		readWriteExec:       []string{"/apps/demo"},
 		readOnly:            []string{"/etc", "/run/systemd/resolve"},
 		readWrite:           []string{"/dev"},
 		unrestrictedNetwork: true,
 	}
-	want := []string{"--rox", "/bin", "--rox", "/usr", "--ro", "/etc", "--ro", "/run/systemd/resolve", "--rw", "/dev", "--unrestricted-network"}
+	want := []string{"--rox", "/bin", "--rox", "/usr", "--rwx", "/apps/demo", "--ro", "/etc", "--ro", "/run/systemd/resolve", "--rw", "/dev", "--unrestricted-network"}
 	if got := LandrunArgs(p); !reflect.DeepEqual(got, want) {
 		t.Fatalf("LandrunArgs = %#v, want %#v", got, want)
 	}

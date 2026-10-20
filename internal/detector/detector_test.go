@@ -93,8 +93,26 @@ func TestParseCLIJSONModeUnchanged(t *testing.T) {
 	}
 }
 
+func TestParseCLIAsAppDev(t *testing.T) {
+	got, err := parseCLIArgs([]string{"--as-app-dev", "/apps/demo", "--", "bash"})
+	if err != nil {
+		t.Fatalf("parseCLIArgs: %v", err)
+	}
+	if !got.asApp || !got.writableSource || got.appDir != "/apps/demo" || !reflect.DeepEqual(got.command, []string{"bash"}) {
+		t.Fatalf("options = %#v", got)
+	}
+	plain, err := parseCLIArgs([]string{"--as-app", "/apps/demo", "--", "bash"})
+	if err != nil || plain.writableSource {
+		t.Fatalf("--as-app options = %#v, err = %v; want read-only source", plain, err)
+	}
+}
+
 func TestParseCLIAsAppRejectsInvalidShape(t *testing.T) {
 	for _, args := range [][]string{
+		{"--as-app", "--as-app-dev", "/apps/demo", "--", "bash"},
+		{"--as-app-dev", "--as-app-plan", "/apps/demo", "--", "bash"},
+		{"--writable-source", "/apps/demo"},
+		{"--as-app-dev", "/apps/demo"},
 		{"--as-app"},
 		{"--as-app", "/apps/demo"},
 		{"--as-app", "/apps/demo", "tool"},
@@ -453,6 +471,28 @@ func TestRuntimeSandboxArgsComeFromSandboxPolicy(t *testing.T) {
 	}
 	if cmd[start+1+len(want)] != "--env" {
 		t.Fatalf("after policy args got %q, want --env", cmd[start+1+len(want)])
+	}
+}
+
+func TestAsAppPlanWritableSource(t *testing.T) {
+	appDir := makeApp(t, map[string]testFile{"main.ts": {body: "console.log('hello')\n"}})
+	env := map[string]string{"REVERSE_BIN_PORT": "7777"}
+	for _, tt := range []struct {
+		writable bool
+		want     string
+		unwanted string
+	}{
+		{writable: false, want: "--rox " + appDir, unwanted: "--rwx " + appDir},
+		{writable: true, want: "--rwx " + appDir, unwanted: "--rox " + appDir},
+	} {
+		resolved, err := resolveApp(context.Background(), appDir, env, []string{"bash"}, true, tt.writable)
+		if err != nil {
+			t.Fatalf("resolveApp writable=%v: %v", tt.writable, err)
+		}
+		cmd := strings.Join(*resolved.Executable, " ") + " "
+		if !strings.Contains(cmd, tt.want+" ") || strings.Contains(cmd, tt.unwanted+" ") {
+			t.Fatalf("writable=%v command %q: want %q, not %q", tt.writable, cmd, tt.want, tt.unwanted)
+		}
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 type Policy struct {
 	readOnly            []string
 	readOnlyExec        []string
+	readWriteExec       []string // LandrunArgs only; see WithWritable.
 	readWrite           []string
 	denyTCPConnect      bool // Apply only; landrun denies connect by default.
 	unrestrictedNetwork bool // LandrunArgs only.
@@ -77,6 +78,14 @@ func runtimePolicy(appDir string, static bool, socketDir string, etcDir string) 
 	return p
 }
 
+// WithWritable moves dir from read/execute to read/write/execute. It is the
+// only difference between a production app sandbox and a dev session.
+func (p Policy) WithWritable(dir string) Policy {
+	p.readOnlyExec = slices.DeleteFunc(slices.Clone(p.readOnlyExec), func(s string) bool { return s == dir })
+	p.readWriteExec = append(slices.Clone(p.readWriteExec), dir)
+	return p
+}
+
 // etcSymlinkGrants returns the parent directories of well-known /etc symlink
 // targets that lie outside granted. The parent (not the file) is granted
 // because Landlock rules pin inodes and systemd-resolved replaces its files
@@ -123,6 +132,9 @@ func LandrunArgs(p Policy) []string {
 	var args []string
 	for _, path := range p.readOnlyExec {
 		args = append(args, "--rox", path)
+	}
+	for _, path := range p.readWriteExec {
+		args = append(args, "--rwx", path)
 	}
 	for _, path := range p.readOnly {
 		args = append(args, "--ro", path)

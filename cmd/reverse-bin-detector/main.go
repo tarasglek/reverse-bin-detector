@@ -23,7 +23,7 @@ func main() {
 	var err error
 	if sshgate.IsInvocation(os.Args[0]) {
 		cfg := sshgate.Config{AppsRoot: sshAppsRoot, Path: sshPath, AgeKeyFile: sshAgeKeyFile}
-		err = sshgate.Run(ctx, os.Args, cfg, detector.RunAsApp)
+		err = sshgate.Run(ctx, os.Args, cfg, detector.RunAsAppDev)
 	} else {
 		err = detector.Run(ctx, os.Args[1:], os.Stdout)
 	}
