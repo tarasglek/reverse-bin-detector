@@ -1,10 +1,8 @@
 # Release process
 
-Detector releases use human-authored release notes. Before pushing a version tag:
+Before pushing tag `vX.Y.Z`:
 
-1. Add `release-notes/<tag>.md`, where `<tag>` is the exact tag (for example, `v1.2.3`).
-2. Start the file with `# Reverse Bin Detector vX.Y.Z`.
-3. Include non-empty `## Highlights`, `## Breaking changes`, and `## Full list of changes` sections. Highlights and Full list of changes must each contain at least one `- ` bullet. Write `None.` under Breaking changes when applicable.
-4. Run `make check`, then push the matching tag.
+1. Add `release-notes/vX.Y.Z.md`: at most 100 words, dense and terse.
+2. Run `make check`, `make release-notes TAG=vX.Y.Z`, and `make deps-check`. deps-check updates Go modules, the Go toolchain, and GitHub Actions to latest and runs `go fix`; commit any diff it leaves.
 
-Tagged CI validates `release-notes/<tag>.md` before GoReleaser runs. A missing or malformed file stops publication, and the validated file becomes the GitHub release body.
+Tagged CI reruns both checks before GoReleaser publishes the notes as the release body.
