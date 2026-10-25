@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
@@ -619,12 +620,8 @@ func wrapRuntimeSandbox(command []string, policy sandbox.Policy, envs []string) 
 
 func buildAppEnvs(appDir string, appEnv map[string]string, overrides map[string]string, kind appKind) []string {
 	merged := make(map[string]string, len(appEnv)+len(overrides)+3)
-	for key, value := range appEnv {
-		merged[key] = value
-	}
-	for key, value := range overrides {
-		merged[key] = value
-	}
+	maps.Copy(merged, appEnv)
+	maps.Copy(merged, overrides)
 	if _, ok := merged["PATH"]; !ok {
 		if path := os.Getenv("PATH"); path != "" {
 			merged["PATH"] = path

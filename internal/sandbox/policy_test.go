@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -138,14 +139,7 @@ func TestLandrunArgs(t *testing.T) {
 func extraGrants(values []string, baseline ...string) []string {
 	var extra []string
 	for _, value := range values {
-		found := false
-		for _, base := range baseline {
-			if value == base {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !slices.Contains(baseline, value) {
 			extra = append(extra, value)
 		}
 	}
@@ -154,10 +148,8 @@ func extraGrants(values []string, baseline ...string) []string {
 
 func assertContains(t *testing.T, values []string, want string) {
 	t.Helper()
-	for _, value := range values {
-		if value == want {
-			return
-		}
+	if slices.Contains(values, want) {
+		return
 	}
 	t.Fatalf("%q not in %#v", want, values)
 }

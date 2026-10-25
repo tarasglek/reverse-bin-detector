@@ -37,7 +37,7 @@ func DetectionPolicy(appDir string, env map[string]string) Policy {
 func detectionPolicy(appDir string, env map[string]string, etcDir string) Policy {
 	ro := []string{appDir, "/dev/null", "/bin", "/usr", "/lib", "/lib64", "/etc"}
 	if pathEnv := env["PATH"]; pathEnv != "" {
-		for _, path := range strings.Split(pathEnv, string(filepath.ListSeparator)) {
+		for path := range strings.SplitSeq(pathEnv, string(filepath.ListSeparator)) {
 			if path != "" {
 				ro = append(ro, path)
 			}
