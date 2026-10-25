@@ -1,23 +1,21 @@
 package sandbox
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 )
 
-// Policy is the filesystem/network allowlist shared by the detection sandbox
-// (rendered by Apply via go-landlock) and the app runtime sandbox (rendered by
-// LandrunArgs). Both sandboxes derive from the same constructors so that grants
-// cannot drift between the two code paths.
+// Policy is a filesystem/network allowlist, rendered as landrun flags by
+// Command. landrun denies TCP bind/connect unless unrestrictedNetwork is set.
 type Policy struct {
 	readOnly            []string
 	readOnlyExec        []string
-	readWriteExec       []string // LandrunArgs only; see WithWritable.
+	readWriteExec       []string // see WithWritable
 	readWrite           []string
-	denyTCPConnect      bool // Apply only; landrun denies connect by default.
-	unrestrictedNetwork bool // LandrunArgs only.
+	unrestrictedNetwork bool
 }
 
 // etcSymlinks lists /etc entries that are commonly symlinks into directories
@@ -29,41 +27,43 @@ var etcSymlinks = []string{"resolv.conf"}
 // /run/resolvconf and /run/NetworkManager are legitimate resolv.conf homes.
 var broadDirs = []string{"/", "/run", "/var", "/tmp", "/home", "/root"}
 
-// DetectionPolicy restricts the plan-emitting detector child.
-func DetectionPolicy(appDir string, env map[string]string) Policy {
-	return detectionPolicy(appDir, env, "/etc")
-}
-
-func detectionPolicy(appDir string, env map[string]string, etcDir string) Policy {
-	ro := []string{appDir, "/dev/null", "/bin", "/usr", "/lib", "/lib64", "/etc"}
-	if pathEnv := env["PATH"]; pathEnv != "" {
-		for path := range strings.SplitSeq(pathEnv, string(filepath.ListSeparator)) {
-			if path != "" {
-				ro = append(ro, path)
-			}
-		}
+// SOPSPolicy restricts sops decrypting an app's secrets: system files, the
+// sops binary, and the age key, with no network. Secrets files are tenant
+// controlled, and their metadata can point sops at KMS, Vault, cloud metadata
+// endpoints, or gpg.
+func SOPSPolicy(sopsPath, ageKeyFile string) Policy {
+	p := Policy{
+		readOnlyExec: []string{"/bin", "/usr", "/lib", "/lib64", sopsPath},
+		readOnly:     []string{"/etc"},
 	}
-	if key := env["SOPS_AGE_KEY_FILE"]; key != "" {
-		ro = append(ro, key)
+	if ageKeyFile != "" {
+		p.readOnly = append(p.readOnly, ageKeyFile)
 	}
-	ro = append(ro, etcSymlinkGrants(etcDir, appDir, ro)...)
-	return Policy{readOnly: ro, denyTCPConnect: true}
+	return p
 }
 
 // RuntimePolicy restricts the app process launched through landrun. Static
 // apps only serve files and get no network, sysfs, data dir, or DNS grants.
-func RuntimePolicy(appDir string, static bool, socketDir string) Policy {
+func RuntimePolicy(appDir string, static bool, socketDir string) (Policy, error) {
 	return runtimePolicy(appDir, static, socketDir, "/etc")
 }
 
-func runtimePolicy(appDir string, static bool, socketDir string, etcDir string) Policy {
+func runtimePolicy(appDir string, static bool, socketDir string, etcDir string) (Policy, error) {
 	p := Policy{
 		readOnlyExec: []string{"/bin", "/usr", "/lib", "/lib64", "/proc", "/sys/fs/cgroup"},
 		readOnly:     []string{"/etc"},
 		readWrite:    []string{"/dev"},
 	}
-	if st, err := os.Stat(filepath.Join(appDir, "data")); !static && err == nil && st.IsDir() {
-		p.readWrite = append(p.readWrite, filepath.Join(appDir, "data"))
+	// Lstat: landrun follows symlinks, so a tenant's data -> ../other/data
+	// would grant write access to another app.
+	data := filepath.Join(appDir, "data")
+	if st, err := os.Lstat(data); !static && err == nil {
+		if st.Mode()&os.ModeSymlink != 0 {
+			return Policy{}, fmt.Errorf("%s must be a directory, not a symlink", data)
+		}
+		if st.IsDir() {
+			p.readWrite = append(p.readWrite, data)
+		}
 	}
 	if socketDir != "" {
 		p.readWrite = append(p.readWrite, socketDir)
@@ -75,7 +75,7 @@ func runtimePolicy(appDir string, static bool, socketDir string, etcDir string) 
 		granted := slices.Concat(p.readOnly, p.readOnlyExec)
 		p.readOnly = append(p.readOnly, etcSymlinkGrants(etcDir, appDir, granted)...)
 	}
-	return p
+	return p, nil
 }
 
 // WithWritable moves dir from read/execute to read/write/execute. It is the
@@ -127,8 +127,7 @@ func underAny(path string, dirs []string) bool {
 	return false
 }
 
-// LandrunArgs renders p as landrun flags (without the command or --env).
-func LandrunArgs(p Policy) []string {
+func landrunArgs(p Policy) []string {
 	var args []string
 	for _, path := range p.readOnlyExec {
 		args = append(args, "--rox", path)

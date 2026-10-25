@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"net"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/tarasglek/caddy-reverse-bin/detectorschema"
 	"github.com/tarasglek/reverse-bin-detector/internal/sandbox"
@@ -44,23 +46,21 @@ const (
 )
 
 type cliOptions struct {
-	allowUnsafeNoLandlock bool
-	noRuntimeSandbox      bool
-	showVersion           bool
-	asApp                 bool
-	asAppPlan             bool
-	writableSource        bool
-	publicHost            string
-	appDir                string
-	command               []string
+	noRuntimeSandbox bool
+	showVersion      bool
+	asApp            bool
+	asAppPlan        bool
+	writableSource   bool
+	publicHost       string
+	appDir           string
+	command          []string
 }
 
 func parseCLIArgs(args []string) (cliOptions, error) {
 	var opts cliOptions
 	fs := flag.NewFlagSet("reverse-bin-detector", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fs.BoolVar(&opts.allowUnsafeNoLandlock, "allow-unsafe-no-landlock", false, "disable detection Landlock sandbox")
-	fs.BoolVar(&opts.noRuntimeSandbox, "no-runtime-sandbox", false, "emit backend command without runtime sandbox wrapper")
+	fs.BoolVar(&opts.noRuntimeSandbox, "no-runtime-sandbox", false, "run sops and emit the backend command without landrun (tests only)")
 	fs.BoolVar(&opts.showVersion, "version", false, "print version and exit")
 	fs.BoolVar(&opts.asApp, "as-app", false, "execute command with app runtime sandbox")
 	fs.BoolVar(&opts.asAppPlan, "as-app-plan", false, "")
@@ -92,7 +92,7 @@ func parseCLIArgs(args []string) (cliOptions, error) {
 		}
 		opts.command = append([]string(nil), rest[2:]...)
 	} else if len(rest) != 1 || opts.writableSource {
-		return cliOptions{}, fmt.Errorf("usage: reverse-bin-detector [--allow-unsafe-no-landlock] [--public-host=HOST] APP_DIR\n       reverse-bin-detector [--public-host=HOST] --as-app|--as-app-dev APP_DIR -- COMMAND [ARGS...]")
+		return cliOptions{}, fmt.Errorf("usage: reverse-bin-detector [--no-runtime-sandbox] [--public-host=HOST] APP_DIR\n       reverse-bin-detector [--public-host=HOST] --as-app|--as-app-dev APP_DIR -- COMMAND [ARGS...]")
 	}
 	appDir, err := filepath.Abs(rest[0])
 	if err != nil {
@@ -132,9 +132,6 @@ func runAsApp(ctx context.Context, opts cliOptions) error {
 	args := []string{"--as-app-plan", opts.appDir, "--"}
 	if opts.writableSource {
 		args = append([]string{"--writable-source"}, args...)
-	}
-	if opts.allowUnsafeNoLandlock {
-		args = append([]string{"--allow-unsafe-no-landlock"}, args...)
 	}
 	if opts.publicHost != "" {
 		args = append([]string{"--public-host=" + opts.publicHost}, args...)
@@ -195,12 +192,13 @@ func executeAsAppPlan(plan *detectorschema.DetectorOutput) error {
 
 func emitPlan(ctx context.Context, opts cliOptions, stdout io.Writer) error {
 	appDir := opts.appDir
-	if !opts.allowUnsafeNoLandlock {
-		if err := sandbox.ApplyDetection(appDir, environMap(os.Environ()), sandbox.LandlockOptions{}); err != nil {
+	sandboxed := !opts.noRuntimeSandbox
+	if sandboxed {
+		if err := sandbox.RequireLandlock(); err != nil {
 			return err
 		}
 	}
-	env, err := LoadAppEnv(ctx, appDir)
+	env, err := LoadAppEnv(ctx, appDir, sandboxed)
 	if err != nil {
 		return err
 	}
@@ -211,23 +209,12 @@ func emitPlan(ctx context.Context, opts cliOptions, stdout io.Writer) error {
 	if opts.asAppPlan {
 		out, err = resolveApp(ctx, appDir, env, opts.command, true, opts.writableSource)
 	} else {
-		out, err = ResolveAppWithRuntimeSandbox(ctx, appDir, env, !opts.noRuntimeSandbox)
+		out, err = ResolveAppWithRuntimeSandbox(ctx, appDir, env, sandboxed)
 	}
 	if err != nil {
 		return err
 	}
 	return json.NewEncoder(stdout).Encode(out)
-}
-
-func environMap(environ []string) map[string]string {
-	env := make(map[string]string, len(environ))
-	for _, entry := range environ {
-		name, value, ok := strings.Cut(entry, "=")
-		if ok {
-			env[name] = value
-		}
-	}
-	return env
 }
 
 type EnvAppConfig struct {
@@ -296,47 +283,74 @@ func hasTCPConfig(cfg EnvAppConfig) bool {
 
 var ErrMultipleEnvSources = errors.New("multiple env sources")
 
-func LoadAppEnv(ctx context.Context, appDir string) (map[string]string, error) {
-	dotEnvPath := filepath.Join(appDir, ".env")
-	secretsPath := filepath.Join(appDir, "secrets.enc.json")
-	hasDotEnv, err := fileExists(dotEnvPath)
+// LoadAppEnv reads APP/.env or decrypts APP/secrets.enc.json. Both are read
+// through os.Root, so a tenant's symlink to another app's files is an error.
+// sandboxed runs sops under landrun.
+func LoadAppEnv(ctx context.Context, appDir string, sandboxed bool) (map[string]string, error) {
+	root, err := os.OpenRoot(appDir)
 	if err != nil {
 		return nil, err
 	}
-	hasSecrets, err := fileExists(secretsPath)
+	defer root.Close()
+	dotEnv, err := readOptional(root, ".env")
 	if err != nil {
 		return nil, err
 	}
-	if hasDotEnv && hasSecrets {
+	secrets, err := readOptional(root, "secrets.enc.json")
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case dotEnv != nil && secrets != nil:
 		return nil, fmt.Errorf("%w: cannot use both .env and secrets.enc.json", ErrMultipleEnvSources)
-	}
-	if !hasDotEnv && !hasSecrets {
-		return map[string]string{}, nil
-	}
-
-	if hasDotEnv {
-		data, err := os.ReadFile(dotEnvPath)
+	case dotEnv != nil:
+		return parseDotEnv(string(dotEnv)), nil
+	case secrets != nil:
+		dotenv, err := decryptSOPS(ctx, secrets, sandboxed)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("decrypt secrets.enc.json: %w", err)
 		}
-		return parseDotEnv(string(data)), nil
+		return parseDotEnv(dotenv), nil
 	}
-	dotenv, err := decryptSOPS(ctx, secretsPath)
-	if err != nil {
-		return nil, fmt.Errorf("decrypt secrets.enc.json: %w", err)
-	}
-	return parseDotEnv(dotenv), nil
+	return map[string]string{}, nil
 }
 
-func decryptSOPS(ctx context.Context, path string) (string, error) {
+// readOptional returns nil for a missing file.
+func readOptional(root *os.Root, name string) ([]byte, error) {
+	data, err := root.ReadFile(name)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	return data, err
+}
+
+// decryptSOPS feeds ciphertext to sops on stdin, so sops opens no app path.
+func decryptSOPS(ctx context.Context, ciphertext []byte, sandboxed bool) (string, error) {
 	sopsPath, err := exec.LookPath("sops")
 	if err != nil {
 		return "", err
 	}
-	cmd := exec.CommandContext(ctx, sopsPath, "--decrypt", "--input-type", "json", "--output-type", "dotenv", path)
+	argv := []string{sopsPath, "decrypt", "--input-type", "json", "--output-type", "dotenv"}
+	if sandboxed {
+		key := os.Getenv("SOPS_AGE_KEY_FILE")
+		var names []string
+		if key != "" {
+			names = []string{"SOPS_AGE_KEY_FILE"}
+		}
+		argv = sandbox.Command(sandbox.SOPSPolicy(sopsPath, key), names, argv)
+	}
+	// Tenant metadata naming KMS makes sops retry for ~13 s even with every
+	// connect denied; Caddy waits for the plan.
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Stdin = bytes.NewReader(ciphertext)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	stdout, err := cmd.Output()
+	if ctx.Err() != nil {
+		return "", fmt.Errorf("sops timed out after 5s; does secrets.enc.json name non-age keys? %w", ctx.Err())
+	}
 	if err != nil {
 		if msg := strings.TrimSpace(stderr.String()); msg != "" {
 			return "", fmt.Errorf("%w: %s", err, msg)
@@ -344,17 +358,6 @@ func decryptSOPS(ctx context.Context, path string) (string, error) {
 		return "", err
 	}
 	return string(stdout), nil
-}
-
-func fileExists(path string) (bool, error) {
-	_, err := os.Stat(path)
-	if err == nil {
-		return true, nil
-	}
-	if os.IsNotExist(err) {
-		return false, nil
-	}
-	return false, err
 }
 
 func parseDotEnv(content string) map[string]string {
@@ -438,13 +441,16 @@ func resolveApp(ctx context.Context, appDir string, env map[string]string, custo
 			return detectorschema.DetectorOutput{}, err
 		}
 	}
-	envs := buildAppEnvs(appDir, env, overrides, app.kind)
+	envs, names := buildAppEnvs(appDir, env, overrides, app.kind)
 	if runtimeSandbox {
-		policy := sandbox.RuntimePolicy(appDir, app.kind == staticApp, tr.socketDir)
+		policy, err := sandbox.RuntimePolicy(appDir, app.kind == staticApp, tr.socketDir)
+		if err != nil {
+			return detectorschema.DetectorOutput{}, err
+		}
 		if writableSource {
 			policy = policy.WithWritable(appDir)
 		}
-		cmd = wrapPIDNamespace(wrapRuntimeSandbox(cmd, policy, envs))
+		cmd = wrapPIDNamespace(sandbox.Command(policy, names, cmd))
 	}
 	return schemaOutput(cmd, appDir, envs, tr.proxy, cfg), nil
 }
@@ -502,9 +508,15 @@ func commandFor(a app, tr transport) ([]string, error) {
 	}
 }
 
+// isFile stats through os.Root: a symlink out of appDir is an error.
 func isFile(appDir, name string, executable bool) (bool, error) {
-	st, err := os.Stat(filepath.Join(appDir, name))
-	if os.IsNotExist(err) {
+	root, err := os.OpenRoot(appDir)
+	if err != nil {
+		return false, err
+	}
+	defer root.Close()
+	st, err := root.Stat(name)
+	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
 	if err != nil || !st.Mode().IsRegular() {
@@ -523,17 +535,34 @@ func resolveTransport(appDir string, cfg EnvAppConfig, kind appKind) (transport,
 		return transport{kind: "unix", proxy: "unix/" + path, socketDir: dir}, map[string]string{}, nil
 	}
 	if cfg.SocketPath != nil {
-		if filepath.IsAbs(*cfg.SocketPath) {
-			return transport{}, nil, fmt.Errorf("Unix socket path must be relative")
-		}
-		path := filepath.Join(appDir, *cfg.SocketPath)
-		return transport{kind: "unix", proxy: "unix/" + path}, map[string]string{}, nil
+		tr, err := appSocket(appDir, *cfg.SocketPath)
+		return tr, map[string]string{}, err
 	}
 	if !hasTCPConfig(cfg) && kind == pythonApp {
-		path := filepath.Join(appDir, "data", "reverse-bin.sock")
-		return transport{kind: "unix", proxy: "unix/" + path}, map[string]string{KeySocketPath: filepath.Join("data", "reverse-bin.sock")}, nil
+		rel := filepath.Join("data", "reverse-bin.sock")
+		tr, err := appSocket(appDir, rel)
+		return tr, map[string]string{KeySocketPath: rel}, err
 	}
 	return tcpTransport(cfg)
+}
+
+// appSocket rejects socket paths that leave appDir, by .. or by a symlinked
+// directory: Caddy, outside the sandbox, deletes the socket before launch.
+func appSocket(appDir, rel string) (transport, error) {
+	if !filepath.IsLocal(rel) {
+		return transport{}, fmt.Errorf("Unix socket path must be relative and inside the app directory")
+	}
+	if dir := filepath.Dir(rel); dir != "." {
+		root, err := os.OpenRoot(appDir)
+		if err != nil {
+			return transport{}, err
+		}
+		defer root.Close()
+		if _, err := root.Stat(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return transport{}, fmt.Errorf("Unix socket directory: %w", err)
+		}
+	}
+	return transport{kind: "unix", proxy: "unix/" + filepath.Join(appDir, rel)}, nil
 }
 
 func staticRuntimeDir(appDir string) string {
@@ -610,15 +639,9 @@ func wrapPIDNamespace(command []string) []string {
 	return append(wrapped, command...)
 }
 
-func wrapRuntimeSandbox(command []string, policy sandbox.Policy, envs []string) []string {
-	wrapped := append([]string{"landrun"}, sandbox.LandrunArgs(policy)...)
-	for _, env := range envs {
-		wrapped = append(wrapped, "--env", env)
-	}
-	return append(wrapped, command...)
-}
-
-func buildAppEnvs(appDir string, appEnv map[string]string, overrides map[string]string, kind appKind) []string {
+// buildAppEnvs returns the app environment as sorted NAME=VALUE entries and
+// the matching names.
+func buildAppEnvs(appDir string, appEnv map[string]string, overrides map[string]string, kind appKind) ([]string, []string) {
 	merged := make(map[string]string, len(appEnv)+len(overrides)+3)
 	maps.Copy(merged, appEnv)
 	maps.Copy(merged, overrides)
@@ -646,5 +669,5 @@ func buildAppEnvs(appDir string, appEnv map[string]string, overrides map[string]
 	for _, key := range keys {
 		envs = append(envs, key+"="+merged[key])
 	}
-	return envs
+	return envs, keys
 }

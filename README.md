@@ -7,6 +7,7 @@ Detect app kind, build env, generate sandbox launch plan for [reverse-bin-hostin
 - Read app dir: `.env` or SOPS `secrets.enc.json`
 - Detect kind: deno, python, static, explicit `REVERSE_BIN_COMMAND`
 - Emit landrun/namespace launch JSON for Caddy
+- Sandbox: [landrun](https://github.com/zouuup/landrun) on PATH, kernel Landlock ABI ≥ 6 (Linux 6.12+); refuses to plan otherwise. App files are read via `os.Root`, so symlinks out of the app dir fail; sops decrypts from stdin under landrun with no network
 - With `--public-host=app.example.com`, inject `REVERSE_BIN_PUBLIC_HOST` unless the app env sets it; the app is always served as `https://$REVERSE_BIN_PUBLIC_HOST` (use it for CSRF origins, OAuth redirects, absolute links; `${REVERSE_BIN_PUBLIC_HOST%%:*}` where a bare hostname is required)
 
 Full docs: **reverse-bin-hosting README** — https://github.com/tarasglek/reverse-bin-hosting

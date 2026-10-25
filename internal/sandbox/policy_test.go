@@ -8,13 +8,25 @@ import (
 	"testing"
 )
 
-func TestDetectionPolicy(t *testing.T) {
-	p := DetectionPolicy("/apps/demo", map[string]string{"PATH": "/x:/y", "SOPS_AGE_KEY_FILE": "/keys/age.txt"})
-	for _, want := range []string{"/apps/demo", "/dev/null", "/usr", "/x", "/y", "/keys/age.txt"} {
-		assertContains(t, p.readOnly, want)
+func TestSOPSPolicy(t *testing.T) {
+	p := SOPSPolicy("/opt/sops", "/keys/age.txt")
+	assertContains(t, p.readOnlyExec, "/opt/sops")
+	assertContains(t, p.readOnly, "/keys/age.txt")
+	if p.unrestrictedNetwork || len(p.readWrite) > 0 || len(p.readWriteExec) > 0 {
+		t.Fatalf("SOPSPolicy grants network or writes: %#v", p)
 	}
-	if !p.denyTCPConnect {
-		t.Fatal("denyTCPConnect = false, want true")
+	if got := SOPSPolicy("/opt/sops", ""); len(got.readOnly) != 1 {
+		t.Fatalf("readOnly without key = %#v, want only /etc", got.readOnly)
+	}
+}
+
+func TestRuntimePolicyRejectsSymlinkedData(t *testing.T) {
+	appDir := t.TempDir()
+	if err := os.Symlink(t.TempDir(), filepath.Join(appDir, "data")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RuntimePolicy(appDir, false, ""); err == nil {
+		t.Fatal("symlinked data accepted")
 	}
 }
 
@@ -23,7 +35,7 @@ func TestRuntimePolicy(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(appDir, "data"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	p := RuntimePolicy(appDir, false, "/run/sock")
+	p := mustRuntimePolicy(t, appDir, false, "/run/sock", "/etc")
 	for _, want := range []string{"/bin", "/usr", "/lib", "/lib64", "/proc", "/sys/fs/cgroup", appDir} {
 		assertContains(t, p.readOnlyExec, want)
 	}
@@ -37,7 +49,7 @@ func TestRuntimePolicy(t *testing.T) {
 		t.Fatal("unrestrictedNetwork = false, want true")
 	}
 
-	static := RuntimePolicy(appDir, true, "/run/sock")
+	static := mustRuntimePolicy(t, appDir, true, "/run/sock", "/etc")
 	assertNotContains(t, static.readOnly, "/sys")
 	assertNotContains(t, static.readWrite, filepath.Join(appDir, "data"))
 	if static.unrestrictedNetwork {
@@ -87,16 +99,9 @@ func TestEtcSymlinkGrants(t *testing.T) {
 			} else if err := os.Symlink(tt.link, resolv); err != nil {
 				t.Fatal(err)
 			}
-			p := runtimePolicy(app, tt.static, "", etcDir)
+			p := mustRuntimePolicy(t, app, tt.static, "", etcDir)
 			if got := extraGrants(p.readOnly, "/etc", "/sys"); !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("runtime extra read-only grants = %#v, want %#v", got, tt.want)
-			}
-			if tt.static {
-				return
-			}
-			d := detectionPolicy(app, nil, etcDir)
-			if got := extraGrants(d.readOnly, app, "/dev/null", "/bin", "/usr", "/lib", "/lib64", "/etc"); !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("detection extra read-only grants = %#v, want %#v", got, tt.want)
 			}
 		})
 	}
@@ -104,7 +109,7 @@ func TestEtcSymlinkGrants(t *testing.T) {
 
 func TestWithWritable(t *testing.T) {
 	appDir := t.TempDir()
-	base := RuntimePolicy(appDir, false, "")
+	base := mustRuntimePolicy(t, appDir, false, "", "/etc")
 	p := base.WithWritable(appDir)
 	assertNotContains(t, p.readOnlyExec, appDir)
 	if !reflect.DeepEqual(p.readWriteExec, []string{appDir}) {
@@ -119,6 +124,14 @@ func TestWithWritable(t *testing.T) {
 	assertContains(t, base.readOnlyExec, appDir)
 }
 
+func TestCommand(t *testing.T) {
+	got := Command(Policy{readOnly: []string{"/etc"}}, []string{"A", "B"}, []string{"app", "--rw", "/"})
+	want := []string{"landrun", "--best-effort", "--ro", "/etc", "--env", "A", "--env", "B", "--", "app", "--rw", "/"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Command = %#v, want %#v", got, want)
+	}
+}
+
 func TestLandrunArgs(t *testing.T) {
 	p := Policy{
 		readOnlyExec:        []string{"/bin", "/usr"},
@@ -128,11 +141,11 @@ func TestLandrunArgs(t *testing.T) {
 		unrestrictedNetwork: true,
 	}
 	want := []string{"--rox", "/bin", "--rox", "/usr", "--rwx", "/apps/demo", "--ro", "/etc", "--ro", "/run/systemd/resolve", "--rw", "/dev", "--unrestricted-network"}
-	if got := LandrunArgs(p); !reflect.DeepEqual(got, want) {
-		t.Fatalf("LandrunArgs = %#v, want %#v", got, want)
+	if got := landrunArgs(p); !reflect.DeepEqual(got, want) {
+		t.Fatalf("landrunArgs = %#v, want %#v", got, want)
 	}
 	p.unrestrictedNetwork = false
-	assertNotContains(t, LandrunArgs(p), "--unrestricted-network")
+	assertNotContains(t, landrunArgs(p), "--unrestricted-network")
 }
 
 // extraGrants returns values not in the baseline, preserving order.
@@ -168,4 +181,13 @@ func assertNotContains(t *testing.T, values []string, unwanted string) {
 			t.Fatalf("%q unexpectedly in %#v", unwanted, values)
 		}
 	}
+}
+
+func mustRuntimePolicy(t *testing.T, appDir string, static bool, socketDir, etcDir string) Policy {
+	t.Helper()
+	p, err := runtimePolicy(appDir, static, socketDir, etcDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }

@@ -20,7 +20,7 @@ func TestCLIOutputParsesWithDetectorSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command("go", "run", ".", "--allow-unsafe-no-landlock", appDir)
+	cmd := exec.Command("go", "run", ".", "--no-runtime-sandbox", appDir)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout

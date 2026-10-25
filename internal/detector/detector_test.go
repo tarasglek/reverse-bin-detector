@@ -84,11 +84,11 @@ func TestPrepareAsAppExecResolvesPlan(t *testing.T) {
 }
 
 func TestParseCLIJSONModeUnchanged(t *testing.T) {
-	got, err := parseCLIArgs([]string{"--allow-unsafe-no-landlock", "--no-runtime-sandbox", "/apps/demo"})
+	got, err := parseCLIArgs([]string{"--no-runtime-sandbox", "/apps/demo"})
 	if err != nil {
 		t.Fatalf("parseCLIArgs: %v", err)
 	}
-	if got.asApp || got.appDir != "/apps/demo" || !got.allowUnsafeNoLandlock || !got.noRuntimeSandbox {
+	if got.asApp || got.appDir != "/apps/demo" || !got.noRuntimeSandbox {
 		t.Fatalf("options = %#v", got)
 	}
 }
@@ -439,10 +439,15 @@ func TestResolveAppRuntimeSandbox(t *testing.T) {
 		t.Fatalf("wrapped command prefix = %#v, want %#v", (*resolved.Executable)[:min(len(*resolved.Executable), len(wantPrefix))], wantPrefix)
 	}
 	cmd := strings.Join(*resolved.Executable, " ")
-	for _, want := range []string{"--env DENO_NO_UPDATE_CHECK=1", "--rox " + appDir, "--unrestricted-network", "deno serve"} {
+	for _, want := range []string{"landrun --best-effort", "--env DENO_NO_UPDATE_CHECK --", "--rox " + appDir, "--unrestricted-network", "-- deno serve"} {
 		if !strings.Contains(cmd, want) {
 			t.Fatalf("wrapped command %q missing %q", cmd, want)
 		}
+	}
+	// Values travel in the plan's envs; argv, readable by every host user,
+	// carries names only.
+	if strings.Contains(cmd, "=") {
+		t.Fatalf("wrapped command %q contains an env value", cmd)
 	}
 
 	plain, err := ResolveAppWithRuntimeSandbox(context.Background(), appDir, map[string]string{"REVERSE_BIN_PORT": "7777"}, false)
@@ -465,12 +470,17 @@ func TestRuntimeSandboxArgsComeFromSandboxPolicy(t *testing.T) {
 	for start < len(cmd) && cmd[start] != "landrun" {
 		start++
 	}
-	want := sandbox.LandrunArgs(sandbox.RuntimePolicy(appDir, false, ""))
-	if start+1+len(want) > len(cmd) || !reflect.DeepEqual(cmd[start+1:start+1+len(want)], want) {
-		t.Fatalf("landrun args = %#v, want prefix %#v", cmd[start+1:], want)
+	policy, err := sandbox.RuntimePolicy(appDir, false, "")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if cmd[start+1+len(want)] != "--env" {
-		t.Fatalf("after policy args got %q, want --env", cmd[start+1+len(want)])
+	want := sandbox.Command(policy, nil, nil)
+	want = want[:len(want)-1] // policy flags, without the trailing --
+	if start+len(want) > len(cmd) || !reflect.DeepEqual(cmd[start:start+len(want)], want) {
+		t.Fatalf("landrun args = %#v, want prefix %#v", cmd[start:], want)
+	}
+	if cmd[start+len(want)] != "--env" {
+		t.Fatalf("after policy args got %q, want --env", cmd[start+len(want)])
 	}
 }
 
@@ -559,5 +569,34 @@ func assertLocalTCP(t *testing.T, addr string) {
 	}
 	if host != "127.0.0.1" || port == "" {
 		t.Fatalf("addr = %q, want 127.0.0.1:<port>", addr)
+	}
+}
+
+func TestDetectAppRejectsEntryPointSymlinkOutOfApp(t *testing.T) {
+	appDir := makeApp(t, nil)
+	if err := os.Symlink(filepath.Join(t.TempDir(), "main.ts"), filepath.Join(appDir, "main.ts")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := detectApp(appDir, EnvAppConfig{}); err == nil || !strings.Contains(err.Error(), "escapes") {
+		t.Fatalf("detectApp error = %v, want path escape", err)
+	}
+}
+
+// Caddy deletes the socket path before launch, outside the sandbox.
+func TestResolveAppRejectsSocketPathOutOfApp(t *testing.T) {
+	appDir := makeApp(t, map[string]testFile{"main.py": {body: "#!/usr/bin/env python3\n", mode: 0o755}})
+	if _, err := ResolveApp(context.Background(), appDir, map[string]string{KeySocketPath: "../other/data/x.sock"}); err == nil {
+		t.Fatal("SOCKET_PATH with .. accepted")
+	}
+	if err := os.Remove(filepath.Join(appDir, "data")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(appDir, "data")); err != nil {
+		t.Fatal(err)
+	}
+	for _, env := range []map[string]string{{}, {KeySocketPath: "data/x.sock"}} {
+		if _, err := ResolveApp(context.Background(), appDir, env); err == nil {
+			t.Fatalf("env %v: socket under symlinked data accepted", env)
+		}
 	}
 }

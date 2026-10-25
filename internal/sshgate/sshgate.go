@@ -146,7 +146,8 @@ func sessionCommand(lookupEnv func(string) (string, bool)) ([]string, error) {
 	if len(env) == 0 {
 		return command, nil
 	}
-	return append(append([]string{"env"}, env...), command...), nil
+	// Absolute: see sandbox.Command.
+	return append(append([]string{"/usr/bin/env"}, env...), command...), nil
 }
 
 func isFileTransfer(program string) bool {

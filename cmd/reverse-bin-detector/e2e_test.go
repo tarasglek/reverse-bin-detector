@@ -100,7 +100,7 @@ func TestCLIAppWithoutDataPlansReadOnly(t *testing.T) {
 
 func TestCLIInvalidAppExitsNonZero(t *testing.T) {
 	appDir := t.TempDir()
-	cmd := exec.Command("go", "run", ".", "--allow-unsafe-no-landlock", "--no-runtime-sandbox", appDir)
+	cmd := exec.Command("go", "run", ".", "--no-runtime-sandbox", appDir)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("detector succeeded, want failure; output %s", out)
@@ -303,7 +303,7 @@ func waitFor(cond func() bool) bool {
 
 func runDetectorOK(t *testing.T, appDir string, flags ...string) *detectorschema.DetectorOutput {
 	t.Helper()
-	args := append([]string{"run", ".", "--allow-unsafe-no-landlock", "--no-runtime-sandbox"}, flags...)
+	args := append([]string{"run", ".", "--no-runtime-sandbox"}, flags...)
 	cmd := exec.Command("go", append(args, appDir)...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

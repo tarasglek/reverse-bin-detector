@@ -1,3 +1,5 @@
+> Superseded in v0.1.21: the detection self-sandbox, go-landlock, and `--allow-unsafe-no-landlock` were removed; landrun is the only sandbox.
+
 # Go Landlock Detector Plan — TL;DR Checklist
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement checklist top-down.

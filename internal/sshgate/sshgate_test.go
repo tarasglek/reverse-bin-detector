@@ -102,7 +102,7 @@ func TestParseCommand(t *testing.T) {
 		{
 			"terminal env passthrough",
 			map[string]string{"TERM": "xterm-256color", "LANG": "C.UTF-8", "SSH_ORIGINAL_COMMAND": "ls", "HOME": "/ignored"},
-			[]string{"env", "TERM=xterm-256color", "LANG=C.UTF-8", "sh", "-c", "ls"},
+			[]string{"/usr/bin/env", "TERM=xterm-256color", "LANG=C.UTF-8", "sh", "-c", "ls"},
 		},
 	}
 	for _, tt := range tests {

@@ -45,7 +45,7 @@ jobs:
           cache: true
 
       - name: Install sandbox runtime
-        run: go install github.com/zouuup/landrun/cmd/landrun@v0.1.14
+        run: go install github.com/zouuup/landrun/cmd/landrun@latest
 
       - name: Enable unprivileged user namespaces
         run: |
