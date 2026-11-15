@@ -13,7 +13,7 @@ import (
 type Policy struct {
 	readOnly            []string
 	readOnlyExec        []string
-	readWriteExec       []string // see WithWritable
+	readWriteExec       []string // app data/ and WithWritable
 	readWrite           []string
 	unrestrictedNetwork bool
 }
@@ -62,7 +62,9 @@ func runtimePolicy(appDir string, static bool, socketDir string, etcDir string) 
 			return Policy{}, fmt.Errorf("%s must be a directory, not a symlink", data)
 		}
 		if st.IsDir() {
-			p.readWrite = append(p.readWrite, data)
+			// rwx, not rw: apps run tools they install in data/, and that must
+			// not depend on the --rox app dir grant above it.
+			p.readWriteExec = append(p.readWriteExec, data)
 		}
 	}
 	if socketDir != "" {

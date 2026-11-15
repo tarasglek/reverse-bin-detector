@@ -42,9 +42,11 @@ func TestRuntimePolicy(t *testing.T) {
 	for _, want := range []string{"/etc", "/sys"} {
 		assertContains(t, p.readOnly, want)
 	}
-	for _, want := range []string{"/dev", filepath.Join(appDir, "data"), "/run/sock"} {
+	for _, want := range []string{"/dev", "/run/sock"} {
 		assertContains(t, p.readWrite, want)
 	}
+	assertContains(t, p.readWriteExec, filepath.Join(appDir, "data"))
+	assertNotContains(t, p.readWrite, filepath.Join(appDir, "data"))
 	if !p.unrestrictedNetwork {
 		t.Fatal("unrestrictedNetwork = false, want true")
 	}
@@ -52,6 +54,7 @@ func TestRuntimePolicy(t *testing.T) {
 	static := mustRuntimePolicy(t, appDir, true, "/run/sock", "/etc")
 	assertNotContains(t, static.readOnly, "/sys")
 	assertNotContains(t, static.readWrite, filepath.Join(appDir, "data"))
+	assertNotContains(t, static.readWriteExec, filepath.Join(appDir, "data"))
 	if static.unrestrictedNetwork {
 		t.Fatal("static unrestrictedNetwork = true, want false")
 	}

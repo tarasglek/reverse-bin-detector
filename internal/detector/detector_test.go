@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -307,8 +308,8 @@ func TestResolveAppWithoutDataDirectoryRunsReadOnly(t *testing.T) {
 				if err != nil {
 					t.Fatalf("app without data directory: %v", err)
 				}
-				if hasOptionValue(*resolved.Executable, "--rw", dataDir) {
-					t.Fatalf("plan grants write access to missing data directory: %q", *resolved.Executable)
+				if slices.Contains(*resolved.Executable, dataDir) {
+					t.Fatalf("plan grants access to missing data directory: %q", *resolved.Executable)
 				}
 			})
 		}
@@ -341,8 +342,8 @@ func TestResolveStaticAppRuntimeSandboxUsesOnlySocketDirectory(t *testing.T) {
 	if !strings.Contains(cmd, "--rw /run/reverse-bin/static-apps/app-") {
 		t.Fatalf("static sandbox command missing runtime socket dir: %q", cmd)
 	}
-	if strings.Contains(cmd, "--rw "+filepath.Join(appDir, "data")) {
-		t.Fatalf("static sandbox command grants app data write access: %q", cmd)
+	if slices.Contains(*resolved.Executable, filepath.Join(appDir, "data")) {
+		t.Fatalf("static sandbox command grants app data access: %q", cmd)
 	}
 	if hasOptionValue(*resolved.Executable, "--ro", "/sys") || hasOptionValue(*resolved.Executable, "--rw", "/sys") {
 		t.Fatalf("static sandbox command grants sysfs access: %q", cmd)

@@ -30,8 +30,9 @@ make build          # or: go build ./cmd/reverse-bin-detector
 
 Both run `COMMAND` with the sandbox, environment, and working directory the
 detector generates for the app. `--as-app` is the production sandbox: source
-read-only, `data/` writable. `--as-app-dev` is the same sandbox with the app
-source writable, for editing and `git push`; development only.
+read-only, `data/` writable and executable (`--rwx`). `--as-app-dev` is the
+same sandbox with the app source writable, for editing and `git push`;
+development only.
 
 ```sh
 ./reverse-bin-detector --as-app ~/apps/demo -- deno test

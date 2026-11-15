@@ -93,8 +93,8 @@ func TestCLIAppWithoutDataPlansReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("schema parse failed: %v\n%s", err, out)
 	}
-	if got := strings.Join(*payload.Executable, " "); strings.Contains(got, "--rw "+filepath.Join(appDir, "data")) {
-		t.Fatalf("plan grants write access to missing data/: %s", got)
+	if slices.Contains(*payload.Executable, filepath.Join(appDir, "data")) {
+		t.Fatalf("plan grants access to missing data/: %q", *payload.Executable)
 	}
 }
 

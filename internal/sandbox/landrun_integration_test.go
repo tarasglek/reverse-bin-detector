@@ -100,3 +100,30 @@ func requireLandrun(t *testing.T) {
 		t.Skip(err)
 	}
 }
+
+// TestLandrunRuntimePolicyAllowsWriteThenExecInData pins the contract that an
+// app can install and run a binary in data/ while its source stays read-only.
+// TestRuntimePolicy pins the explicit --rwx flag itself.
+func TestLandrunRuntimePolicyAllowsWriteThenExecInData(t *testing.T) {
+	requireLandrun(t)
+	appDir := t.TempDir()
+	data := filepath.Join(appDir, "data")
+	if err := os.Mkdir(data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := mustRuntimePolicy(t, appDir, false, "", "/etc")
+
+	bin := filepath.Join(data, "tool")
+	script := "printf '#!/bin/sh\\necho ran\\n' > " + bin + " && chmod +x " + bin + " && " + bin +
+		" && ! touch " + filepath.Join(appDir, "src") + " 2>/dev/null && echo src-ro"
+	argv := Command(p, nil, []string{"/bin/sh", "-c", script})
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("landrun failed: %v\n%s", err, out)
+	}
+	if got, want := string(out), "ran\nsrc-ro\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
