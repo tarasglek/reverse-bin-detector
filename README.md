@@ -35,7 +35,7 @@ Any other `REVERSE_BIN_*` key is an error.
 
 ## Sandbox
 
-`unshare --pid --kill-child` (descendants die with the app) around [landrun](https://github.com/zouuup/landrun), with `sh` as the namespace's PID 1 so the app itself gets SIGTERM (PID 1 ignores signals it has no handler for): the app dir read-only and executable, `data/` writable, network allowed except for static apps. Requires kernel Landlock ABI ≥ 6 (Linux 6.12+); the detector refuses to plan without it. App files are read through `os.Root`, so a symlink out of the app dir is an error; sops runs under landrun with no network. `--as-app-dev` makes the source writable.
+`unshare --pid --kill-child` (descendants die with the app) around [landrun](https://github.com/zouuup/landrun), with `sh` as the namespace's PID 1 so the app itself gets SIGTERM (PID 1 ignores signals it has no handler for): the app dir read-only and executable, `data/` writable, network allowed except for static apps. Requires kernel Landlock ABI ≥ 6 (Linux 6.12+); the detector refuses to plan without it. `unshare` and `landrun` are absolute and start with the app's env, so `LD_*`, `GCONV_PATH` and `GLIBC_TUNABLES` are refused there (set them in the launch command). App files are read through `os.Root`, so a symlink out of the app dir is an error; sops runs under landrun with no network. `--as-app-dev` makes the source writable.
 
 ## Per-app SSH: `rb-ssh`
 

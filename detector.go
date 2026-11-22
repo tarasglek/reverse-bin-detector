@@ -73,6 +73,11 @@ func plan(ctx context.Context, appDir, publicHost string, sandboxed bool, comman
 		if strings.HasPrefix(k, "REVERSE_BIN_") && !slices.Contains(knownKeys, k) {
 			return App{}, fmt.Errorf("unknown key %s; known: %s", k, strings.Join(knownKeys, ", "))
 		}
+		// unshare and landrun start with the app's env: the dynamic loader
+		// would run code these name before the sandbox exists.
+		if strings.HasPrefix(k, "LD_") || k == "GCONV_PATH" || k == "GLIBC_TUNABLES" {
+			return App{}, fmt.Errorf("%s would act before the sandbox; set it in the launch command instead", k)
+		}
 	}
 	if err := setPublicHost(env, publicHost); err != nil {
 		return App{}, err
@@ -126,6 +131,10 @@ func plan(ctx context.Context, appDir, publicHost string, sandboxed bool, comman
 		fallback = append([]string{"sh", "-c", `rm -f -- "$SOCKET_PATH" && exec "$@"`, "sh"}, kindCommand(k, env)...)
 	default:
 		host := cmp.Or(env[KeyReverseBinHost], "127.0.0.1")
+		// Caddy dials this address with the visitor's request: only loopback.
+		if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() && !ip.IsUnspecified() {
+			return App{}, fmt.Errorf("%s=%s: want a loopback or wildcard IP", KeyReverseBinHost, host)
+		}
 		port := env[KeyReverseBinPort]
 		if port == "" {
 			if port, err = freePort(host); err != nil {
@@ -165,13 +174,29 @@ func plan(ctx context.Context, appDir, publicHost string, sandboxed bool, comman
 		// sh, not the app, is PID 1 of the namespace: PID 1 ignores signals it
 		// has no handler for, so most apps would never see reverse-bin's SIGTERM.
 		command = append([]string{"/bin/sh", "-c", `"$@"; exit $?`, "sh"}, command...)
-		a.Executable = wrapPIDNamespace(Command(p, names, command))
+		// Absolute paths, resolved with the detector's PATH: the command runs
+		// with the app's env, and unshare would find landrun through the app's
+		// PATH, letting an app substitute its own and run unsandboxed.
+		unshare, err := exec.LookPath("unshare")
+		if err != nil {
+			return App{}, err
+		}
+		landrun, err := exec.LookPath("landrun")
+		if err != nil {
+			return App{}, err
+		}
+		if !filepath.IsAbs(unshare) || !filepath.IsAbs(landrun) {
+			return App{}, fmt.Errorf("sandbox tools must resolve to absolute paths: %s %s", unshare, landrun)
+		}
+		argv := Command(p, names, command)
+		argv[0] = landrun
+		a.Executable = wrapPIDNamespace(unshare, argv)
 	}
 	return a, nil
 }
 
-func wrapPIDNamespace(command []string) []string {
-	wrapped := []string{"unshare", "--map-current-user", "--pid", "--fork", "--mount-proc", "--ipc", "--uts", "--kill-child", "--"}
+func wrapPIDNamespace(unshare string, command []string) []string {
+	wrapped := []string{unshare, "--map-current-user", "--pid", "--fork", "--mount-proc", "--ipc", "--uts", "--kill-child", "--"}
 	return append(wrapped, command...)
 }
 
