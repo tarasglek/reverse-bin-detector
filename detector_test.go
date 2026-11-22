@@ -28,8 +28,8 @@ func appDir(t *testing.T, files map[string]string) string {
 	dir := t.TempDir()
 	for name, content := range files {
 		mode := os.FileMode(0o644)
-		if strings.HasSuffix(name, "*") {
-			name, mode = strings.TrimSuffix(name, "*"), 0o755
+		if before, ok := strings.CutSuffix(name, "*"); ok {
+			name, mode = before, 0o755
 		}
 		writeFile(t, filepath.Join(dir, name), content, mode)
 	}
