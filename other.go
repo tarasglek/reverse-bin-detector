@@ -1,5 +1,7 @@
 //go:build !linux
 
-package sandbox
+package main
 
 func landlockABI() int { return 0 }
+
+func dieWithParent() error { return nil }
