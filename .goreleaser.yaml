@@ -8,7 +8,7 @@ before:
 
 builds:
   - id: reverse-bin-detector
-    main: ./cmd/reverse-bin-detector
+    main: .
     binary: reverse-bin-detector
     env:
       - CGO_ENABLED=0
@@ -20,9 +20,9 @@ builds:
     ldflags:
       - >-
         -s -w
-        -X github.com/tarasglek/reverse-bin-detector/internal/detector.Version={{ .Version }}
-        -X github.com/tarasglek/reverse-bin-detector/internal/detector.Commit={{ .Commit }}
-        -X github.com/tarasglek/reverse-bin-detector/internal/detector.BuildDate={{ .Date }}
+        -X main.version={{ .Version }}
+        -X main.commit={{ .Commit }}
+        -X main.buildDate={{ .Date }}
 
 archives:
   - id: binaries

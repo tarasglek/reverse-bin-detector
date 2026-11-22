@@ -5,15 +5,18 @@ NOTES_MAX_WORDS ?= 100
 # Fixers rewrite the same files; never run targets in parallel.
 .NOTPARALLEL:
 
-.PHONY: test build check deps-check deps-latest modernize vulncheck release-notes release-dry-run
+.PHONY: test build check deps-check deps-latest modernize vulncheck release-notes
 
 test:
-	go test ./...
+	go test -race ./...
 
 build:
-	go build ./cmd/reverse-bin-detector
+	go build .
 
-check: test build
+check:
+	go vet ./...
+	@test -z "$$(gofmt -l .)" || { gofmt -l .; echo "error: run gofmt -w" >&2; exit 1; }
+	$(MAKE) test build
 
 # deps-latest and modernize rewrite files; deps-check fails when they did.
 # Run it locally and commit the result.
@@ -38,6 +41,3 @@ release-notes:
 	@f=release-notes/$(TAG).md; [ -s "$$f" ] || { echo "error: $$f missing" >&2; exit 1; }; \
 	n=$$(wc -w < "$$f"); [ "$$n" -le $(NOTES_MAX_WORDS) ] || { \
 	echo "error: $$f: $$n words > $(NOTES_MAX_WORDS). Rewrite caveman: fragments, no filler. Keep what changed, breaking, GO/CVE IDs." >&2; exit 1; }
-
-release-dry-run:
-	go run github.com/goreleaser/goreleaser/v2@latest release --snapshot --clean --skip=publish

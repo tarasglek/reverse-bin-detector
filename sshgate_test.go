@@ -1,4 +1,4 @@
-package sshgate
+package main
 
 import (
 	"os"

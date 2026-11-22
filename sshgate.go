@@ -1,4 +1,15 @@
-// Package sshgate maps an SSH key to an app sandbox.
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+)
+
+// rb-ssh maps an SSH key to an app sandbox.
 //
 // sshd binds each key to an app with a per-key forced command in
 // authorized_keys:
@@ -9,16 +20,6 @@
 // service user's login shell, so rb-ssh sees either `rb-ssh APP` or
 // `rb-ssh -c "<dir>/rb-ssh APP"`. Anything else, such as a key line without
 // command=, su, or sudo -i, is refused instead of getting a general shell.
-package sshgate
-
-import (
-	"context"
-	"fmt"
-	"os"
-	"path/filepath"
-	"regexp"
-	"strings"
-)
 
 // Name is the argv[0] that selects SSH gate mode.
 const Name = "rb-ssh"
