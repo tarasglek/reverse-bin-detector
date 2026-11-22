@@ -58,11 +58,10 @@ func TestKinds(t *testing.T) {
 		files map[string]string
 		want  []string // "" entries are not compared (ports, socket paths)
 	}{
-		"explicit beats all":               {map[string]string{".env": "REVERSE_BIN_COMMAND=./run\n", "main.ts": ""}, []string{"sh", "-c", "./run"}},
-		"deno":                             {map[string]string{"main.ts": "", "main.py*": ""}, []string{"deno", "serve", "--watch", "--allow-all", "--host", "127.0.0.1", "--port", "", "main.ts"}},
-		"python":                           {map[string]string{"main.py*": "", "index.html": ""}, []string{"sh", "-c", `rm -f -- "$SOCKET_PATH" && exec "$@"`, "sh", "./main.py"}},
-		"main.py not executable is static": {map[string]string{"main.py": "", "index.html": ""}, []string{"reverse-bin-caddy", "file-server", "--listen", "", "--root", "."}},
-		"dist":                             {map[string]string{"dist/index.html": ""}, []string{"reverse-bin-caddy", "file-server", "--listen", "", "--root", "dist"}},
+		"explicit beats all":            {map[string]string{".env": "REVERSE_BIN_COMMAND=./run\n", "main.ts": ""}, []string{"sh", "-c", "./run"}},
+		"deno beats static":             {map[string]string{"main.ts": "", "index.html": ""}, []string{"deno", "serve", "--watch", "--allow-all", "--host", "127.0.0.1", "--port", "", "main.ts"}},
+		"main.py is not an entry point": {map[string]string{"main.py*": "", "index.html": ""}, []string{"reverse-bin-caddy", "file-server", "--listen", "", "--root", "."}},
+		"dist":                          {map[string]string{"dist/index.html": ""}, []string{"reverse-bin-caddy", "file-server", "--listen", "", "--root", "dist"}},
 	} {
 		a, err := planOf(t, appDir(t, tc.files))
 		if err != nil {
@@ -84,8 +83,7 @@ func TestKinds(t *testing.T) {
 }
 
 // TestTransport pins the address handling, as in v0.1.22: TCP with a free
-// port in REVERSE_BIN_PORT unless the app sets it, a python app without
-// listener config on data/reverse-bin.sock, a SOCKET_PATH app with its
+// port in REVERSE_BIN_PORT unless the app sets it, a SOCKET_PATH app with its
 // directory created and its stale socket removed inside the command, static
 // apps on a managed socket.
 func TestTransport(t *testing.T) {
@@ -94,15 +92,11 @@ func TestTransport(t *testing.T) {
 	if _, port, _ := net.SplitHostPort(a.ReverseProxyTo); err != nil || env["REVERSE_BIN_PORT"] != port || env["REVERSE_BIN_HOST"] != "127.0.0.1" || port == "" {
 		t.Fatalf("default TCP: %q env %v err %v", a.ReverseProxyTo, env, err)
 	}
-	a, _ = planOf(t, appDir(t, map[string]string{"main.py*": "", ".env": "REVERSE_BIN_PORT=9001\nREVERSE_BIN_HOST=0.0.0.0\n"}))
+	a, _ = planOf(t, appDir(t, map[string]string{"main.ts": "", ".env": "REVERSE_BIN_PORT=9001\nREVERSE_BIN_HOST=0.0.0.0\n"}))
 	if a.ReverseProxyTo != "127.0.0.1:9001" || appEnv(a)["REVERSE_BIN_HOST"] != "0.0.0.0" {
 		t.Fatalf("app's port/host: %q env %v; want 127.0.0.1:9001 (canonical) and the host kept", a.ReverseProxyTo, a.Envs)
 	}
-	dir := appDir(t, map[string]string{"main.py*": ""})
-	if a, _ = planOf(t, dir); a.ReverseProxyTo != "unix/"+filepath.Join(dir, "data/reverse-bin.sock") || appEnv(a)["SOCKET_PATH"] != "data/reverse-bin.sock" {
-		t.Fatalf("python default: %q env %v", a.ReverseProxyTo, a.Envs)
-	}
-	dir = appDir(t, map[string]string{".env": "REVERSE_BIN_COMMAND=./srv\nSOCKET_PATH=data/run/s.sock\n"})
+	dir := appDir(t, map[string]string{".env": "REVERSE_BIN_COMMAND=./srv\nSOCKET_PATH=data/run/s.sock\n"})
 	a, err = planOf(t, dir)
 	want := []string{"sh", "-c", `rm -f -- "$SOCKET_PATH" && exec "$@"`, "sh", "sh", "-c", "./srv"}
 	if err != nil || a.ReverseProxyTo != "unix/"+filepath.Join(dir, "data/run/s.sock") || !reflect.DeepEqual(a.Executable, want) {

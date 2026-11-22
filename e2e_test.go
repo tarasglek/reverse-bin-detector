@@ -55,10 +55,8 @@ func TestKindsServeHTTP(t *testing.T) {
 	if _, err := os.Stat("/usr/lib/reverse-bin/deno"); err == nil {
 		t.Setenv("PATH", "/usr/lib/reverse-bin:"+os.Getenv("PATH"))
 	}
-	py := "#!/usr/bin/env python3\nimport http.server, os, socketserver\nclass S(socketserver.UnixStreamServer):\n    def get_request(self):\n        r, _ = super().get_request()\n        return r, ('local', 0)\nS(os.environ['SOCKET_PATH'], http.server.SimpleHTTPRequestHandler).serve_forever()\n"
 	for name, files := range map[string]map[string]string{
 		"explicit": {".env": "REVERSE_BIN_COMMAND=exec python3 -m http.server \"$REVERSE_BIN_PORT\" --bind \"$REVERSE_BIN_HOST\"\n", "data/.keep": ""},
-		"python":   {"main.py*": py, "data/.keep": ""},
 		"deno":     {"main.ts": "export default { fetch: () => new Response('ok') };\n", "data/.keep": ""},
 		"static":   {"index.html": "<h1>ok</h1>\n"},
 		"explicit on a stale socket": {
@@ -142,7 +140,7 @@ func TestKindsServeHTTP(t *testing.T) {
 func TestAsApp(t *testing.T) {
 	bin, _ := buildBinary(t, t.TempDir())
 	app := func() string {
-		return appDir(t, map[string]string{"main.py*": "#!/usr/bin/env python3\n", "data/.keep": "", ".env": "CUSTOM=secret\n"})
+		return appDir(t, map[string]string{"main.ts": "", "data/.keep": "", ".env": "CUSTOM=secret\n"})
 	}
 	run := func(mode, dir string, args ...string) (string, error) {
 		out, err := exec.Command(bin, append([]string{mode, dir, "--"}, args...)...).Output()
@@ -188,7 +186,7 @@ func TestAsApp(t *testing.T) {
 func TestRBSSH(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "todo")
-	writeFile(t, filepath.Join(dir, "main.py"), "#!/usr/bin/env python3\n", 0o755)
+	writeFile(t, filepath.Join(dir, "main.ts"), "", 0o644)
 	writeFile(t, filepath.Join(dir, "data/.keep"), "", 0o644)
 	_, rbssh := buildBinary(t, root)
 	run := func(env []string, args ...string) (string, string, error) {
@@ -223,7 +221,7 @@ func TestRBSSH(t *testing.T) {
 	}
 	git(dir, "init", "-q", "-b", "main")
 	git(dir, "config", "receive.denyCurrentBranch", "updateInstead")
-	git(dir, "add", "main.py")
+	git(dir, "add", "main.ts")
 	git(dir, "commit", "-q", "-m", "init")
 	clone := filepath.Join(t.TempDir(), "clone")
 	git("", "clone", "-q", dir, clone)
