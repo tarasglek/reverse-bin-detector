@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -36,9 +39,17 @@ func appDir(t *testing.T, files map[string]string) string {
 	return dir
 }
 
+// setStaticRoot points staticRoot at a temp dir until the test ends.
+func setStaticRoot(t *testing.T) {
+	t.Helper()
+	old := staticRoot
+	staticRoot = t.TempDir()
+	t.Cleanup(func() { staticRoot = old })
+}
+
 func planOf(t *testing.T, dir string) (App, error) {
 	t.Helper()
-	staticRoot = t.TempDir()
+	setStaticRoot(t)
 	return plan(context.Background(), dir, "", false, nil, false)
 }
 
@@ -136,7 +147,7 @@ func TestTransport(t *testing.T) {
 // by default, empty REVERSE_BIN_HEALTH_PATH for connect-only.
 func TestEnvAndHealth(t *testing.T) {
 	dir := appDir(t, map[string]string{"main.ts": "", ".env": "A='x y'\n# c\nHOME=/h\nREVERSE_BIN_HEALTH_METHOD=get\nREVERSE_BIN_HEALTH_STATUS=2xx\n"})
-	staticRoot = t.TempDir()
+	setStaticRoot(t)
 	a, err := plan(context.Background(), dir, "Demo.Example.test", false, nil, false)
 	if err != nil {
 		t.Fatal(err)
@@ -218,4 +229,126 @@ func requireLandrun(t *testing.T) string {
 		t.Skip(err)
 	}
 	return path
+}
+
+// contractJSON is a detector App with every field set, as json.Marshal writes
+// it. caddy-reverse-bin's TestDetectorContract decodes this exact string; a
+// field renamed on either side breaks one of the two tests.
+const contractJSON = `{"executable":["unshare","--","sh","-c","./srv"],"working_directory":"/apps/a","envs":["HOME=/apps/a/data","REVERSE_BIN_PORT=9001"],"reverse_proxy_to":"127.0.0.1:9001","health_method":"GET","health_path":"/h","health_status":2}`
+
+// TestContract pins the JSON the plugin decodes.
+func TestContract(t *testing.T) {
+	out, err := json.Marshal(App{Executable: []string{"unshare", "--", "sh", "-c", "./srv"}, WorkingDirectory: "/apps/a",
+		Envs: []string{"HOME=/apps/a/data", "REVERSE_BIN_PORT=9001"}, ReverseProxyTo: "127.0.0.1:9001",
+		HealthMethod: "GET", HealthPath: "/h", HealthStatus: 2})
+	if err != nil || string(out) != contractJSON {
+		t.Errorf("App marshals to\n%s\nwant\n%s", out, contractJSON)
+	}
+}
+
+// TestPlanInvariants plans, sandboxed as in production, every combination of
+// entry point and listener/health settings, and checks what must hold for any
+// app: exactly the invalid combinations fail, including loader variables that
+// would run code in unshare before the sandbox; the command starts with an
+// absolute unshare --pid --kill-child, then an absolute landrun, then the sh
+// PID 1, even when the app sets a hostile PATH; a static app gets no network;
+// Caddy dials only loopback or a socket inside the app dir or the static root.
+func TestPlanInvariants(t *testing.T) {
+	if err := RequireLandlock(); err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatal(err) // these guards must run in CI
+		}
+		t.Skip(err)
+	}
+	entries := map[string]map[string]string{
+		"explicit": {".env": "REVERSE_BIN_COMMAND=./srv\n"},
+		"deno":     {"main.ts": ""},
+		"static":   {"index.html": ""},
+		"dist":     {"dist/index.html": ""},
+		"none":     {},
+	}
+	settings := map[string]struct {
+		env     string
+		mustErr bool
+	}{
+		"defaults":            {"", false},
+		"path hijack":         {"PATH=/nonexistent\n", false},
+		"tcp":                 {"REVERSE_BIN_HOST=0.0.0.0\nREVERSE_BIN_PORT=9001\n", false},
+		"tcp remote":          {"REVERSE_BIN_HOST=10.0.0.5\nREVERSE_BIN_PORT=9001\n", true},
+		"socket":              {"SOCKET_PATH=data/s.sock\n", false},
+		"socket escapes":      {"SOCKET_PATH=../s.sock\n", true},
+		"socket absolute":     {"SOCKET_PATH=/tmp/s.sock\n", true},
+		"socket and tcp":      {"SOCKET_PATH=data/s.sock\nREVERSE_BIN_PORT=9001\n", true},
+		"unknown key":         {"REVERSE_BIN_PROT=9001\n", true},
+		"loader preload":      {"LD_PRELOAD=/x.so\n", true},
+		"loader library path": {"LD_LIBRARY_PATH=/x\n", true},
+		"gconv":               {"GCONV_PATH=/x\n", true},
+		"health":              {"REVERSE_BIN_HEALTH_METHOD=get\nREVERSE_BIN_HEALTH_PATH=/h\nREVERSE_BIN_HEALTH_STATUS=2xx\n", false},
+		"health status bogus": {"REVERSE_BIN_HEALTH_STATUS=ok\n", true},
+	}
+	for en, files := range entries {
+		for sn, s := range settings {
+			t.Run(en+"/"+sn, func(t *testing.T) {
+				static := en == "static" || en == "dist"
+				wantErr := s.mustErr || en == "none" ||
+					static && (sn == "tcp" || sn == "socket") || en == "deno" && sn == "socket"
+				fs := maps.Clone(files)
+				fs[".env"] += s.env
+				dir := appDir(t, fs)
+				setStaticRoot(t)
+				a, err := plan(context.Background(), dir, "", true, nil, false)
+				if (err != nil) != wantErr {
+					t.Fatalf("err = %v, want error: %v", err, wantErr)
+				}
+				if err != nil {
+					return
+				}
+				x := a.Executable
+				dash := slices.Index(x, "--")
+				if filepath.Base(x[0]) != "unshare" || !filepath.IsAbs(x[0]) || !slices.Contains(x[:dash], "--kill-child") || !slices.Contains(x[:dash], "--pid") ||
+					filepath.Base(x[dash+1]) != "landrun" || !filepath.IsAbs(x[dash+1]) {
+					t.Fatalf("not absolute unshare --pid --kill-child -- absolute landrun: %q", x)
+				}
+				inner := x[dash+1+slices.Index(x[dash+1:], "--")+1:]
+				if !slices.Equal(inner[:4], []string{"/bin/sh", "-c", `"$@"; exit $?`, "sh"}) {
+					t.Errorf("landrun does not run the sh PID 1 first: %q", inner)
+				}
+				if static && slices.Contains(x, "--unrestricted-network") {
+					t.Error("static app has network access")
+				}
+				if path, ok := strings.CutPrefix(a.ReverseProxyTo, "unix/"); ok {
+					in := func(root string) bool { r, err := filepath.Rel(root, path); return err == nil && filepath.IsLocal(r) }
+					if !in(dir) && !in(staticRoot) {
+						t.Errorf("socket %s outside the app dir and static root", path)
+					}
+				} else if host, _, err := net.SplitHostPort(a.ReverseProxyTo); err != nil || !net.ParseIP(host).IsLoopback() {
+					t.Errorf("dials %q, want loopback", a.ReverseProxyTo)
+				}
+				if sn == "health" && (a.HealthMethod != "GET" || a.HealthPath != "/h" || a.HealthStatus != 2) {
+					t.Errorf("health = %s %s %d, want GET /h 2", a.HealthMethod, a.HealthPath, a.HealthStatus)
+				}
+			})
+		}
+	}
+}
+
+// FuzzParseDotEnv feeds app-controlled .env bytes to the parser: it must not
+// panic, and every key it returns is non-empty and trimmed, with no "=" and
+// no key or value holding "\n", so one line cannot become a second KEY=value
+// in the app's env. A "\r" may stay in a key: it cannot split an entry.
+func FuzzParseDotEnv(f *testing.F) {
+	for _, s := range []string{"A=1\n", "export B='x y'\n# c\n", "=v\nk\n", " K = \"v\" \r\n", "A=1\nA=2\n"} {
+		f.Add([]byte(s))
+	}
+	f.Fuzz(func(t *testing.T, b []byte) {
+		env, err := parseDotEnv(b)
+		if err != nil {
+			return
+		}
+		for k, v := range env {
+			if k == "" || k != strings.TrimSpace(k) || strings.ContainsAny(k, "=\n") || strings.Contains(v, "\n") {
+				t.Fatalf("parsed %q to key %q value %q", b, k, v)
+			}
+		}
+	})
 }
