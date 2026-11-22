@@ -41,8 +41,7 @@ func main() {
 	} else {
 		err = run(ctx, os.Args[1:], os.Stdout)
 	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 		os.Exit(exitErr.ExitCode())
 	}
 	if err != nil {
