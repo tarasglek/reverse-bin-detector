@@ -70,6 +70,10 @@ func TestKindsServeHTTP(t *testing.T) {
 			if _, err := exec.LookPath("deno"); name == "deno" && err != nil {
 				t.Skip("deno not installed")
 			}
+			// Static apps and the stale-socket case are served by the packaged Caddy.
+			if _, err := exec.LookPath("reverse-bin-caddy"); (name == "static" || name == "explicit on a stale socket") && err != nil {
+				t.Skip("reverse-bin-caddy not installed")
+			}
 			dir := appDir(t, files)
 			if name == "explicit on a stale socket" {
 				l, err := net.Listen("unix", filepath.Join(dir, "data/s.sock"))
