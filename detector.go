@@ -54,7 +54,6 @@ type kind string
 const (
 	explicitApp kind = "explicit"
 	denoApp     kind = "deno"
-	pythonApp   kind = "python"
 	staticApp   kind = "static"
 )
 
@@ -96,11 +95,6 @@ func plan(ctx context.Context, appDir, publicHost string, sandboxed bool, comman
 	rel, unix := env[KeySocketPath]
 	if unix && (hasHost || hasPort) {
 		return App{}, fmt.Errorf("both TCP listener config and %s are set", KeySocketPath)
-	}
-	if k == pythonApp && !unix && !hasHost && !hasPort {
-		// A python app without listener config gets a unix socket.
-		rel, unix = filepath.Join("data", "reverse-bin.sock"), true
-		env[KeySocketPath] = rel
 	}
 	var socketDir string
 	var fallback []string // the app's own command
@@ -182,14 +176,10 @@ func wrapPIDNamespace(command []string) []string {
 }
 
 func kindCommand(k kind, env map[string]string) []string {
-	switch k {
-	case explicitApp:
-		return []string{"sh", "-c", env[KeyReverseBinCommand]}
-	case denoApp:
+	if k == denoApp {
 		return []string{"deno", "serve", "--watch", "--allow-all", "--host", env[KeyReverseBinHost], "--port", env[KeyReverseBinPort], "main.ts"}
-	default:
-		return []string{"./main.py"}
 	}
+	return []string{"sh", "-c", env[KeyReverseBinCommand]}
 }
 
 func setDefault(env map[string]string, k, v string) {
@@ -205,24 +195,22 @@ func detectKind(appDir string, env map[string]string) (kind, string, error) {
 	}
 	for _, c := range []struct {
 		name string
-		exec bool
 		kind kind
 		root string
 	}{
-		{"main.ts", false, denoApp, ""},
-		{"main.py", true, pythonApp, ""},
-		{"index.html", false, staticApp, "."},
-		{filepath.Join("dist", "index.html"), false, staticApp, "dist"},
+		{"main.ts", denoApp, ""},
+		{"index.html", staticApp, "."},
+		{filepath.Join("dist", "index.html"), staticApp, "dist"},
 	} {
-		if ok, err := isFile(appDir, c.name, c.exec); ok || err != nil {
+		if ok, err := isFile(appDir, c.name); ok || err != nil {
 			return c.kind, c.root, err
 		}
 	}
-	return "", "", fmt.Errorf("no entry point (%s, main.ts, executable main.py, index.html or dist/index.html) in %s", KeyReverseBinCommand, appDir)
+	return "", "", fmt.Errorf("no entry point (%s, main.ts, index.html or dist/index.html) in %s", KeyReverseBinCommand, appDir)
 }
 
 // isFile stats through os.Root: a symlink out of appDir is an error.
-func isFile(appDir, name string, executable bool) (bool, error) {
+func isFile(appDir, name string) (bool, error) {
 	root, err := os.OpenRoot(appDir)
 	if err != nil {
 		return false, err
@@ -232,10 +220,7 @@ func isFile(appDir, name string, executable bool) (bool, error) {
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
-	if err != nil || !st.Mode().IsRegular() {
-		return false, err
-	}
-	return !executable || st.Mode().Perm()&0o111 != 0, nil
+	return err == nil && st.Mode().IsRegular(), err
 }
 
 // appSocket resolves SOCKET_PATH, which must stay inside appDir, and creates

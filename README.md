@@ -13,10 +13,9 @@ reverse-bin-detector [--public-host=HOST] --as-app[-dev] APP_DIR -- CMD...  # ru
 |---|---|---|
 | explicit | `REVERSE_BIN_COMMAND` | `sh -c "$REVERSE_BIN_COMMAND"` |
 | deno | `main.ts` | `deno serve --watch --allow-all --host $REVERSE_BIN_HOST --port $REVERSE_BIN_PORT main.ts` |
-| python | executable `main.py` | `./main.py` |
 | static | `index.html` or `dist/index.html` | `reverse-bin-caddy file-server` on `/run/reverse-bin/static-apps/app-<hash>/reverse-bin.sock` |
 
-Apps listen on TCP: they get `REVERSE_BIN_HOST` and `REVERSE_BIN_PORT` (a free loopback port unless they set it). With `SOCKET_PATH` (relative, inside the app dir) an app listens on that unix socket instead; a python app with no listener settings gets `SOCKET_PATH=data/reverse-bin.sock`. The detector creates a socket's directory, and the launched command removes a stale socket first.
+Apps listen on TCP: they get `REVERSE_BIN_HOST` and `REVERSE_BIN_PORT` (a free loopback port unless they set it). With `SOCKET_PATH` (relative, inside the app dir) an app listens on that unix socket instead. The detector creates a socket's directory, and the launched command removes a stale socket first.
 
 ## App configuration
 
