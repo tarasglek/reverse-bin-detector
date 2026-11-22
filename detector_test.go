@@ -279,6 +279,7 @@ func TestPlanInvariants(t *testing.T) {
 		"socket escapes":      {"SOCKET_PATH=../s.sock\n", true},
 		"socket absolute":     {"SOCKET_PATH=/tmp/s.sock\n", true},
 		"socket and tcp":      {"SOCKET_PATH=data/s.sock\nREVERSE_BIN_PORT=9001\n", true},
+		"socket brace":        {"SOCKET_PATH=data/{http.request.header.X}.sock\n", true},
 		"unknown key":         {"REVERSE_BIN_PROT=9001\n", true},
 		"loader preload":      {"LD_PRELOAD=/x.so\n", true},
 		"loader library path": {"LD_LIBRARY_PATH=/x\n", true},

@@ -254,6 +254,10 @@ func appSocket(appDir, rel string) (string, error) {
 	if !filepath.IsLocal(rel) {
 		return "", fmt.Errorf("%s must be a relative path inside the app directory", KeySocketPath)
 	}
+	// reverse-bin rejects braces in the address: Caddy would expand them.
+	if strings.ContainsAny(rel, "{}") {
+		return "", fmt.Errorf("%s must not contain braces", KeySocketPath)
+	}
 	root, err := os.OpenRoot(appDir)
 	if err != nil {
 		return "", err
