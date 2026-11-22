@@ -1,60 +1,57 @@
 # reverse-bin-detector
 
-Detect app kind, build env, generate sandbox launch plan for [reverse-bin-hosting](https://github.com/tarasglek/reverse-bin-hosting).
-
-## What it does
-
-- Read app dir: `.env` or SOPS `secrets.enc.json`
-- Detect kind: deno, python, static, explicit `REVERSE_BIN_COMMAND`
-- Emit landrun/namespace launch JSON for Caddy
-- Sandbox: [landrun](https://github.com/zouuup/landrun) on PATH, kernel Landlock ABI ≥ 6 (Linux 6.12+); refuses to plan otherwise. App files are read via `os.Root`, so symlinks out of the app dir fail; sops decrypts from stdin under landrun with no network
-- With `--public-host=app.example.com`, inject `REVERSE_BIN_PUBLIC_HOST` unless the app env sets it; the app is always served as `https://$REVERSE_BIN_PUBLIC_HOST` (use it for CSRF origins, OAuth redirects, absolute links; `${REVERSE_BIN_PUBLIC_HOST%%:*}` where a bare hostname is required)
-
-Full docs: **reverse-bin-hosting README** — https://github.com/tarasglek/reverse-bin-hosting
-
-## Build
+Turns an app directory into the `App` that [reverse-bin](https://github.com/tarasglek/caddy-reverse-bin) runs: command, sandbox, environment, address and readiness. Packaged by [reverse-bin-hosting](https://github.com/tarasglek/reverse-bin-hosting), whose Caddyfile calls it per request host.
 
 ```sh
-make build          # or: go build ./cmd/reverse-bin-detector
-./reverse-bin-detector --version
+reverse-bin-detector [--public-host=HOST] APP_DIR                          # print the App as JSON
+reverse-bin-detector [--public-host=HOST] --as-app[-dev] APP_DIR -- CMD...  # run CMD in the app's sandbox
 ```
 
-## Dev-run
+## App kinds
 
-```sh
-./reverse-bin-detector ~/apps/demo | jq
-./reverse-bin-detector --public-host=demo.example.com ~/apps/demo | jq .envs
-```
+| Kind | Detected by | Runs |
+|---|---|---|
+| explicit | `REVERSE_BIN_COMMAND` | `sh -c "$REVERSE_BIN_COMMAND"` |
+| deno | `main.ts` | `deno serve --watch --allow-all --host $REVERSE_BIN_HOST --port $REVERSE_BIN_PORT main.ts` |
+| python | executable `main.py` | `./main.py` |
+| static | `index.html` or `dist/index.html` | `reverse-bin-caddy file-server` on `/run/reverse-bin/static-apps/app-<hash>/reverse-bin.sock` |
 
-## `--as-app` / `--as-app-dev`: run a command as an app
+Apps listen on TCP: they get `REVERSE_BIN_HOST` and `REVERSE_BIN_PORT` (a free loopback port unless they set it). With `SOCKET_PATH` (relative, inside the app dir) an app listens on that unix socket instead; a python app with no listener settings gets `SOCKET_PATH=data/reverse-bin.sock`. The detector creates a socket's directory, and the launched command removes a stale socket first.
 
-Both run `COMMAND` with the sandbox, environment, and working directory the
-detector generates for the app. `--as-app` is the production sandbox: source
-read-only, `data/` writable and executable (`--rwx`). `--as-app-dev` is the
-same sandbox with the app source writable, for editing and `git push`;
-development only.
+## App configuration
 
-```sh
-./reverse-bin-detector --as-app ~/apps/demo -- deno test
-./reverse-bin-detector --as-app ~/apps/demo -- sh -c 'wget -q -O- http://127.0.0.1; echo rc=$?'
-./reverse-bin-detector --as-app-dev ~/apps/demo -- /bin/bash -i
-```
+The app's `.env`, or `secrets.enc.json` decrypted by sops (age key from `SOPS_AGE_KEY_FILE`), not both. Every key reaches the app, plus the listener variables above, `REVERSE_BIN_PUBLIC_HOST`, and `HOME=<app>/data`, `TMPDIR=data`, `PATH` unless set.
 
-Production example (sudo, service identity, keys): see **reverse-bin-hosting README → "Interactive sandbox shells"**.
+| Key | Meaning | Default |
+|---|---|---|
+| `REVERSE_BIN_COMMAND` | Shell command instead of the detected kind | — |
+| `REVERSE_BIN_HOST`, `REVERSE_BIN_PORT` | TCP address to listen on | `127.0.0.1`, a free port |
+| `SOCKET_PATH` | Unix socket to listen on instead | TCP |
+| `REVERSE_BIN_HEALTH_PATH` | Readiness request path; empty: ready once it accepts a connection | `/` |
+| `REVERSE_BIN_HEALTH_METHOD` | Its method | `HEAD` |
+| `REVERSE_BIN_HEALTH_STATUS` | Status it must answer, `200` or `2xx` | any response |
+| `REVERSE_BIN_PUBLIC_HOST` | Public host the app is served at over https; overrides `--public-host` | from Caddy |
 
-### Per-app SSH (`rb-ssh`)
+Any other `REVERSE_BIN_*` key is an error.
 
-Invoked through an `rb-ssh` symlink, the detector maps an SSH key to an app and runs the session as `--as-app-dev` (source writable). Each `authorized_keys` line names its app:
+## Sandbox
+
+`unshare --pid --kill-child` (descendants die with the app) around [landrun](https://github.com/zouuup/landrun), with `sh` as the namespace's PID 1 so the app itself gets SIGTERM (PID 1 ignores signals it has no handler for): the app dir read-only and executable, `data/` writable, network allowed except for static apps. Requires kernel Landlock ABI ≥ 6 (Linux 6.12+); the detector refuses to plan without it. App files are read through `os.Root`, so a symlink out of the app dir is an error; sops runs under landrun with no network. `--as-app-dev` makes the source writable.
+
+## Per-app SSH: `rb-ssh`
+
+Invoked as `rb-ssh`, the detector maps an SSH key to an app and runs the session in its `--as-app-dev` sandbox. Each `authorized_keys` line names its app:
 
 ```
 restrict,pty,command="/usr/lib/reverse-bin/rb-ssh todo" ssh-ed25519 AAAA... todo
 ```
 
-`rb-ssh` is also the service user's login shell, so it accepts only `rb-ssh APP` or `rb-ssh -c "<dir>/rb-ssh APP"` and refuses anything else. No `SSH_ORIGINAL_COMMAND` starts `bash -i`; otherwise it runs `sh -c "$SSH_ORIGINAL_COMMAND"`, which is how `git push reverse-bin@host:.` reaches `git-receive-pack` inside the sandbox. sftp and scp are refused. `PATH`, the apps root, and the age key path are compiled in, not taken from the session. Packaging lives in reverse-bin-hosting.
+It accepts only `rb-ssh APP` or `rb-ssh -c "<dir>/rb-ssh APP"` (it is also the service user's login shell). No `SSH_ORIGINAL_COMMAND` starts `bash -i`; otherwise `sh -c "$SSH_ORIGINAL_COMMAND"`, which is how `git push reverse-bin@host:.` reaches the checkout. sftp and scp are refused. `PATH`, the apps root and the age key path are compiled in.
 
-## Build/check
+## Development
 
 ```sh
-make check        # test + build + release gate
-make release-dry-run
+make check   # vet, gofmt, tests (landrun-backed ones skip without landrun)
 ```
+
+To release `vX.Y.Z`: write `release-notes/vX.Y.Z.md` (at most 100 words), run `make release-notes TAG=vX.Y.Z` and `make deps-check` (commit any diff), then push the tag.
