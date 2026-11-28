@@ -19,8 +19,8 @@ func TestSOPSPolicy(t *testing.T) {
 	if p.unrestrictedNetwork || len(p.readWrite) > 0 || len(p.readWriteExec) > 0 {
 		t.Fatalf("SOPSPolicy grants network or writes: %#v", p)
 	}
-	if !reflect.DeepEqual(p.unix, []string{"/"}) {
-		t.Fatalf("SOPSPolicy unix = %#v, want any socket as before landrun v0.2.0", p.unix)
+	if len(p.unix) > 0 {
+		t.Fatalf("SOPSPolicy unix = %#v, want no socket", p.unix)
 	}
 	if got := SOPSPolicy("/opt/sops", ""); len(got.readOnly) != 1 {
 		t.Fatalf("readOnly without key = %#v, want only /etc", got.readOnly)
@@ -65,10 +65,8 @@ func TestRuntimePolicy(t *testing.T) {
 	if static.unrestrictedNetwork {
 		t.Fatal("static unrestrictedNetwork = true, want false")
 	}
-	for _, q := range []Policy{p, static} {
-		if !reflect.DeepEqual(q.unix, []string{"/"}) {
-			t.Fatalf("unix = %#v, want any socket as before landrun v0.2.0", q.unix)
-		}
+	if len(static.unix) > 0 {
+		t.Fatalf("static unix = %#v, want no socket", static.unix)
 	}
 }
 
@@ -117,6 +115,10 @@ func TestEtcSymlinkGrants(t *testing.T) {
 			p := mustRuntimePolicy(t, app, tt.static, "", etcDir)
 			if got := extraGrants(p.readOnly, "/etc", "/sys"); !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("runtime extra read-only grants = %#v, want %#v", got, tt.want)
+			}
+			// Unix connects: the app's own sockets and the resolver's, nothing else.
+			if wantUnix := append([]string{app}, tt.want...); !tt.static && !reflect.DeepEqual(p.unix, wantUnix) {
+				t.Fatalf("unix grants = %#v, want %#v", p.unix, wantUnix)
 			}
 		})
 	}
