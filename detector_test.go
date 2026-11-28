@@ -237,6 +237,28 @@ func requireLandrun(t *testing.T) string {
 const contractJSON = `{"executable":["unshare","--","sh","-c","./srv"],"working_directory":"/apps/a","envs":["HOME=/apps/a/data","REVERSE_BIN_PORT=9001"],"reverse_proxy_to":"127.0.0.1:9001","health_method":"GET","health_path":"/h","health_status":2}`
 
 // TestContract pins the JSON the plugin decodes.
+// TestGlibcUnsecureEnv: every variable glibc 2.41 drops for setuid programs
+// (UNSECURE_ENVVARS, sysdeps/generic/unsecvars.h) is refused in an app's env,
+// except the ones apps set for themselves that nothing before the sandbox
+// reads.
+func TestGlibcUnsecureEnv(t *testing.T) {
+	allowed := []string{"TMPDIR", "TZDIR", "HOSTALIASES", "LOCALDOMAIN", "RES_OPTIONS", "RESOLV_HOST_CONF",
+		"MALLOC_ARENA_MAX", "MALLOC_ARENA_TEST", "MALLOC_MMAP_MAX_", "MALLOC_MMAP_THRESHOLD_",
+		"MALLOC_PERTURB_", "MALLOC_TOP_PAD_", "MALLOC_TRIM_THRESHOLD_"}
+	for _, name := range []string{"GCONV_PATH", "GETCONF_DIR", "GLIBC_TUNABLES", "HOSTALIASES",
+		"LD_AUDIT", "LD_BIND_NOT", "LD_BIND_NOW", "LD_DEBUG", "LD_DEBUG_OUTPUT", "LD_DYNAMIC_WEAK",
+		"LD_LIBRARY_PATH", "LD_ORIGIN_PATH", "LD_PRELOAD", "LD_PROFILE", "LD_SHOW_AUXV", "LD_VERBOSE",
+		"LD_WARN", "LOCALDOMAIN", "LOCPATH", "MALLOC_ARENA_MAX", "MALLOC_ARENA_TEST", "MALLOC_MMAP_MAX_",
+		"MALLOC_MMAP_THRESHOLD_", "MALLOC_PERTURB_", "MALLOC_TOP_PAD_", "MALLOC_TRACE",
+		"MALLOC_TRIM_THRESHOLD_", "NIS_PATH", "NLSPATH", "RESOLV_HOST_CONF", "RES_OPTIONS", "TMPDIR", "TZDIR"} {
+		dir := appDir(t, map[string]string{".env": "REVERSE_BIN_COMMAND=./srv\n" + name + "=x\n"})
+		_, err := plan(context.Background(), dir, "", false, nil, false)
+		if refused, want := err != nil, !slices.Contains(allowed, name); refused != want || refused && !strings.Contains(err.Error(), name+" would act before the sandbox") {
+			t.Errorf("%s: refused = %v (%v), want %v", name, refused, err, want)
+		}
+	}
+}
+
 func TestContract(t *testing.T) {
 	out, err := json.Marshal(App{Executable: []string{"unshare", "--", "sh", "-c", "./srv"}, WorkingDirectory: "/apps/a",
 		Envs: []string{"HOME=/apps/a/data", "REVERSE_BIN_PORT=9001"}, ReverseProxyTo: "127.0.0.1:9001",
@@ -248,8 +270,8 @@ func TestContract(t *testing.T) {
 
 // TestPlanInvariants plans, sandboxed as in production, every combination of
 // entry point and listener/health settings, and checks what must hold for any
-// app: exactly the invalid combinations fail, including loader variables that
-// would run code in unshare before the sandbox; the command starts with an
+// app: exactly the invalid combinations fail, including glibc variables that
+// would act in unshare before the sandbox; the command starts with an
 // absolute unshare --pid --kill-child, then an absolute landrun, then the sh
 // PID 1, even when the app sets a hostile PATH; a static app gets no network;
 // any other app binds only its own port plus REVERSE_BIN_BIND_TCP (a socket
@@ -312,6 +334,14 @@ func TestPlanInvariants(t *testing.T) {
 		"loader preload":      {"LD_PRELOAD=/x.so\n", true},
 		"loader library path": {"LD_LIBRARY_PATH=/x\n", true},
 		"gconv":               {"GCONV_PATH=/x\n", true},
+		"tunables":            {"GLIBC_TUNABLES=glibc.malloc.check=3\n", true},
+		"malloc tunable":      {"MALLOC_ARENA_MAX=2\n", false},
+		"malloc trace":        {"MALLOC_TRACE=/x\n", true},
+		"locale path":         {"LOCPATH=/x\n", true},
+		"message catalogs":    {"NLSPATH=/x/%N\n", true},
+		"tmpdir":              {"TMPDIR=data/tmp\n", false},
+		"tzdir":               {"TZDIR=/usr/share/zoneinfo\n", false},
+		"resolver options":    {"RES_OPTIONS=ndots:1\nLOCALDOMAIN=example.test\n", false},
 		"health":              {"REVERSE_BIN_HEALTH_METHOD=get\nREVERSE_BIN_HEALTH_PATH=/h\nREVERSE_BIN_HEALTH_STATUS=2xx\n", false},
 		"health status bogus": {"REVERSE_BIN_HEALTH_STATUS=ok\n", true},
 		"bind extra":          {"REVERSE_BIN_PORT=9001\nREVERSE_BIN_BIND_TCP=9229,32000-32010\n", false},
