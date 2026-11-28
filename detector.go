@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -44,10 +45,11 @@ const (
 	KeyReverseBinHealthPath   = "REVERSE_BIN_HEALTH_PATH"
 	KeyReverseBinHealthStatus = "REVERSE_BIN_HEALTH_STATUS"
 	KeyReverseBinPublicHost   = "REVERSE_BIN_PUBLIC_HOST"
+	KeyReverseBinBindTCP      = "REVERSE_BIN_BIND_TCP"
 )
 
 var knownKeys = []string{KeyReverseBinCommand, KeyReverseBinHost, KeyReverseBinPort, KeyReverseBinHealthMethod,
-	KeyReverseBinHealthPath, KeyReverseBinHealthStatus, KeyReverseBinPublicHost}
+	KeyReverseBinHealthPath, KeyReverseBinHealthStatus, KeyReverseBinPublicHost, KeyReverseBinBindTCP}
 
 type kind string
 
@@ -101,11 +103,15 @@ func plan(ctx context.Context, appDir, publicHost string, sandboxed bool, comman
 	if unix && (hasHost || hasPort) {
 		return App{}, fmt.Errorf("both TCP listener config and %s are set", KeySocketPath)
 	}
+	bindTCP, err := parseBindTCP(env[KeyReverseBinBindTCP])
+	if err != nil {
+		return App{}, err
+	}
 	var socketDir string
 	var fallback []string // the app's own command
 	switch {
 	case k == staticApp:
-		if unix || hasHost || hasPort {
+		if unix || hasHost || hasPort || len(bindTCP) > 0 {
 			return App{}, fmt.Errorf("static file server only supports reverse-bin-managed Unix sockets")
 		}
 		// The static sandbox has no network grant, so it serves a unix socket
@@ -147,9 +153,11 @@ func plan(ctx context.Context, appDir, publicHost string, sandboxed bool, comman
 			dialHost = "127.0.0.1"
 		}
 		a.ReverseProxyTo = net.JoinHostPort(dialHost, port)
+		bindTCP = append([]string{port}, bindTCP...)
 		fallback = kindCommand(k, env)
 	}
-	if command == nil {
+	asApp := command != nil
+	if !asApp {
 		command = fallback
 	}
 	setDefault(env, "PATH", os.Getenv("PATH"))
@@ -170,6 +178,13 @@ func plan(ctx context.Context, appDir, publicHost string, sandboxed bool, comman
 		}
 		if writable {
 			p = p.WithWritable(appDir)
+		}
+		// The app binds only its own port (and REVERSE_BIN_BIND_TCP): its code
+		// cannot take another app's port, or Caddy's, with SO_REUSEPORT. This
+		// confines the running app, not its owner: .env chooses the ports, and
+		// --as-app commands (dev sessions) bind as they please.
+		if k != staticApp && !asApp {
+			p.restrictBindTCP, p.bindTCP = true, bindTCP
 		}
 		// sh, not the app, is PID 1 of the namespace: PID 1 ignores signals it
 		// has no handler for, so most apps would never see reverse-bin's SIGTERM.
@@ -246,6 +261,23 @@ func isFile(appDir, name string) (bool, error) {
 		return false, nil
 	}
 	return err == nil && st.Mode().IsRegular(), err
+}
+
+var portSpec = regexp.MustCompile(`^[0-9]{1,5}(-[0-9]{1,5})?$`)
+
+// parseBindTCP reads REVERSE_BIN_BIND_TCP: extra TCP ports or ranges the app
+// may bind, comma-separated. landrun checks the numbers' range.
+func parseBindTCP(v string) ([]string, error) {
+	if v == "" {
+		return nil, nil
+	}
+	ports := strings.Split(v, ",")
+	for _, p := range ports {
+		if !portSpec.MatchString(p) {
+			return nil, fmt.Errorf("%s=%s: want ports or ranges like 9229,32000-32768", KeyReverseBinBindTCP, v)
+		}
+	}
+	return ports, nil
 }
 
 // appSocket resolves SOCKET_PATH, which must stay inside appDir, and creates

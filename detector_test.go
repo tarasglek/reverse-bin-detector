@@ -252,7 +252,35 @@ func TestContract(t *testing.T) {
 // would run code in unshare before the sandbox; the command starts with an
 // absolute unshare --pid --kill-child, then an absolute landrun, then the sh
 // PID 1, even when the app sets a hostile PATH; a static app gets no network;
-// Caddy dials only loopback or a socket inside the app dir or the static root.
+// any other app binds only its own port plus REVERSE_BIN_BIND_TCP (a socket
+// app none); Caddy dials only loopback or a socket inside the app dir or the
+// static root.
+// TestAsAppBindsFreely: a command run with --as-app (a dev session) is not
+// bind-restricted; the app's own plan is. The rule confines the running app,
+// not its owner.
+func TestAsAppBindsFreely(t *testing.T) {
+	if err := RequireLandlock(); err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatal(err)
+		}
+		t.Skip(err)
+	}
+	dir := appDir(t, map[string]string{".env": "REVERSE_BIN_COMMAND=./srv\n"})
+	for command, wantBinds := range map[string]bool{"": true, "sh": false} {
+		var cmd []string
+		if command != "" {
+			cmd = []string{command}
+		}
+		a, err := plan(context.Background(), dir, "", true, cmd, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if binds := slices.Contains(a.Executable, "--bind-tcp"); binds != wantBinds {
+			t.Errorf("command %q: --bind-tcp present = %v, want %v: %q", command, binds, wantBinds, a.Executable)
+		}
+	}
+}
+
 func TestPlanInvariants(t *testing.T) {
 	if err := RequireLandlock(); err != nil {
 		if os.Getenv("CI") != "" {
@@ -286,13 +314,18 @@ func TestPlanInvariants(t *testing.T) {
 		"gconv":               {"GCONV_PATH=/x\n", true},
 		"health":              {"REVERSE_BIN_HEALTH_METHOD=get\nREVERSE_BIN_HEALTH_PATH=/h\nREVERSE_BIN_HEALTH_STATUS=2xx\n", false},
 		"health status bogus": {"REVERSE_BIN_HEALTH_STATUS=ok\n", true},
+		"bind extra":          {"REVERSE_BIN_PORT=9001\nREVERSE_BIN_BIND_TCP=9229,32000-32010\n", false},
+		"socket bind extra":   {"SOCKET_PATH=data/s.sock\nREVERSE_BIN_BIND_TCP=9229\n", false},
+		"bind bogus":          {"REVERSE_BIN_BIND_TCP=9229;rm\n", true},
+		"bind all":            {"REVERSE_BIN_BIND_TCP=0-65535,\n", true},
 	}
 	for en, files := range entries {
 		for sn, s := range settings {
 			t.Run(en+"/"+sn, func(t *testing.T) {
 				static := en == "static" || en == "dist"
 				wantErr := s.mustErr || en == "none" ||
-					static && (sn == "tcp" || sn == "socket") || en == "deno" && sn == "socket"
+					static && (sn == "tcp" || sn == "socket" || strings.Contains(sn, "bind extra")) ||
+					en == "deno" && strings.HasPrefix(sn, "socket")
 				fs := maps.Clone(files)
 				fs[".env"] += s.env
 				dir := appDir(t, fs)
@@ -324,6 +357,27 @@ func TestPlanInvariants(t *testing.T) {
 					}
 				} else if host, _, err := net.SplitHostPort(a.ReverseProxyTo); err != nil || !net.ParseIP(host).IsLoopback() {
 					t.Errorf("dials %q, want loopback", a.ReverseProxyTo)
+				}
+				var binds []string
+				for i, arg := range x {
+					if arg == "--bind-tcp" {
+						binds = append(binds, x[i+1])
+					}
+				}
+				var want []string
+				if !static {
+					if _, port, err := net.SplitHostPort(a.ReverseProxyTo); err == nil {
+						want = append(want, port)
+					}
+					if v := appEnv(a)["REVERSE_BIN_BIND_TCP"]; v != "" {
+						want = append(want, strings.Split(v, ",")...)
+					}
+				}
+				if !slices.Equal(binds, want) {
+					t.Errorf("binds %q, want %q", binds, want)
+				}
+				if bindsNothing := slices.Contains(x, "--restrict-bind-tcp"); bindsNothing != (!static && len(want) == 0) {
+					t.Errorf("--restrict-bind-tcp = %v for binds %q (static %v)", bindsNothing, want, static)
 				}
 				if sn == "health" && (a.HealthMethod != "GET" || a.HealthPath != "/h" || a.HealthStatus != 2) {
 					t.Errorf("health = %s %s %d, want GET /h 2", a.HealthMethod, a.HealthPath, a.HealthStatus)
