@@ -10,7 +10,7 @@ import (
 
 // Policy is a filesystem/network allowlist, rendered as landrun flags by
 // Command. landrun denies TCP bind/connect unless unrestrictedNetwork is set;
-// with it, restrictBindTCP still limits binding to bindTCP.
+// with it, a non-empty bindTCP still limits binding to those ports.
 type Policy struct {
 	readOnly            []string
 	readOnlyExec        []string
@@ -18,8 +18,7 @@ type Policy struct {
 	readWrite           []string
 	unix                []string // pathname unix sockets it may connect to (ABI 9)
 	unrestrictedNetwork bool
-	restrictBindTCP     bool
-	bindTCP             []string // ports or ranges
+	bindTCP             []string // ports or ranges; "0": ports the kernel picks
 }
 
 // etcSymlinks lists /etc entries that are commonly symlinks into directories
@@ -158,9 +157,6 @@ func landrunArgs(p Policy) []string {
 	}
 	for _, port := range p.bindTCP {
 		args = append(args, "--bind-tcp", port)
-	}
-	if p.restrictBindTCP && len(p.bindTCP) == 0 {
-		args = append(args, "--restrict-bind-tcp")
 	}
 	return args
 }

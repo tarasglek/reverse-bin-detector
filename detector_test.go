@@ -274,8 +274,8 @@ func TestContract(t *testing.T) {
 // would act in unshare before the sandbox; the command starts with an
 // absolute unshare --pid --kill-child, then an absolute landrun, then the sh
 // PID 1, even when the app sets a hostile PATH; a static app gets no network;
-// any other app binds only its own port plus REVERSE_BIN_BIND_TCP (a socket
-// app none); Caddy dials only loopback or a socket inside the app dir or the
+// any other app binds exactly kernel-picked ports (0), its own port if it
+// listens on TCP, and REVERSE_BIN_BIND_TCP, with no --restrict-bind-tcp; Caddy dials only loopback or a socket inside the app dir or the
 // static root.
 // TestAsAppBindsFreely: a command run with --as-app (a dev session) is not
 // bind-restricted; the app's own plan is. The rule confines the running app,
@@ -348,6 +348,8 @@ func TestPlanInvariants(t *testing.T) {
 		"socket bind extra":   {"SOCKET_PATH=data/s.sock\nREVERSE_BIN_BIND_TCP=9229\n", false},
 		"bind bogus":          {"REVERSE_BIN_BIND_TCP=9229;rm\n", true},
 		"bind all":            {"REVERSE_BIN_BIND_TCP=0-65535,\n", true},
+		"bind zero":           {"REVERSE_BIN_BIND_TCP=0\n", false},
+		"bind extra and zero": {"REVERSE_BIN_BIND_TCP=0,9229\n", false},
 	}
 	for en, files := range entries {
 		for sn, s := range settings {
@@ -396,18 +398,19 @@ func TestPlanInvariants(t *testing.T) {
 				}
 				var want []string
 				if !static {
+					want = []string{"0"}
 					if _, port, err := net.SplitHostPort(a.ReverseProxyTo); err == nil {
 						want = append(want, port)
 					}
 					if v := appEnv(a)["REVERSE_BIN_BIND_TCP"]; v != "" {
-						want = append(want, strings.Split(v, ",")...)
+						want = append(want, slices.DeleteFunc(strings.Split(v, ","), func(p string) bool { return p == "0" })...)
 					}
 				}
 				if !slices.Equal(binds, want) {
 					t.Errorf("binds %q, want %q", binds, want)
 				}
-				if bindsNothing := slices.Contains(x, "--restrict-bind-tcp"); bindsNothing != (!static && len(want) == 0) {
-					t.Errorf("--restrict-bind-tcp = %v for binds %q (static %v)", bindsNothing, want, static)
+				if slices.Contains(x, "--restrict-bind-tcp") {
+					t.Error("--restrict-bind-tcp: every network app has a --bind-tcp, and a static app no network")
 				}
 				if sn == "health" && (a.HealthMethod != "GET" || a.HealthPath != "/h" || a.HealthStatus != 2) {
 					t.Errorf("health = %s %s %d, want GET /h 2", a.HealthMethod, a.HealthPath, a.HealthStatus)

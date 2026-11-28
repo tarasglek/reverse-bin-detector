@@ -264,9 +264,10 @@ func TestVersion(t *testing.T) {
 	}
 }
 
-// TestBindOnlyOwnPort runs a planned TCP app as reverse-bin would: it binds
-// its own port but not another, unless REVERSE_BIN_BIND_TCP lists it, and its
-// outgoing TCP and UDP (as DNS uses) still work.
+// TestBindOnlyOwnPort runs planned apps as reverse-bin would: a TCP app binds
+// its own port and a kernel-picked one (port 0) but not another fixed port,
+// unless REVERSE_BIN_BIND_TCP lists it; a socket app binds port 0 but no fixed
+// port; outgoing TCP and UDP (as DNS uses) still work.
 func TestBindOnlyOwnPort(t *testing.T) {
 	bin, _ := buildBinary(t, t.TempDir())
 	peer, err := net.Listen("tcp", "127.0.0.1:0")
@@ -287,8 +288,13 @@ def bind(p):
     except OSError as e: return "denied" if e.errno == 13 else str(e)
 socket.create_connection(("127.0.0.1", int(os.environ["PEER"])), timeout=5).close()
 socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(b"q", ("127.0.0.1", int(os.environ["UDP"])))
-print(bind(os.environ["REVERSE_BIN_PORT"]), bind(os.environ["OTHER"]), "out-ok")`
-	for extra, want := range map[string]string{"": "ok denied out-ok", "REVERSE_BIN_BIND_TCP=" + other + "\n": "ok ok out-ok"} {
+own = os.environ.get("REVERSE_BIN_PORT")
+print(bind(own) if own else "-", bind(0), bind(os.environ["OTHER"]), "out-ok")`
+	for extra, want := range map[string]string{
+		"":                                     "ok ok denied out-ok",
+		"REVERSE_BIN_BIND_TCP=" + other + "\n": "ok ok ok out-ok",
+		"SOCKET_PATH=data/s.sock\n":            "- ok denied out-ok",
+	} {
 		dir := appDir(t, map[string]string{"app.py": script, "data/.keep": "", ".env": "REVERSE_BIN_COMMAND=exec python3 app.py\n" + extra +
 			fmt.Sprintf("PEER=%d\nUDP=%d\nOTHER=%s\n", peer.Addr().(*net.TCPAddr).Port, udp.LocalAddr().(*net.UDPAddr).Port, other)})
 		out, err := exec.Command(bin, dir).Output()
