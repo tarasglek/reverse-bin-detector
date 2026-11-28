@@ -263,3 +263,58 @@ func TestVersion(t *testing.T) {
 		t.Fatalf("--version = %q, %v", out, err)
 	}
 }
+
+// TestBindOnlyOwnPort runs a planned TCP app as reverse-bin would: it binds
+// its own port but not another, unless REVERSE_BIN_BIND_TCP lists it, and its
+// outgoing TCP and UDP (as DNS uses) still work.
+func TestBindOnlyOwnPort(t *testing.T) {
+	bin, _ := buildBinary(t, t.TempDir())
+	peer, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+	udp, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udp.Close()
+	other := freeTestPort(t)
+	script := `import os, socket
+def bind(p):
+    s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    try: s.bind(("127.0.0.1", int(p))); return "ok"
+    except OSError as e: return "denied" if e.errno == 13 else str(e)
+socket.create_connection(("127.0.0.1", int(os.environ["PEER"])), timeout=5).close()
+socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(b"q", ("127.0.0.1", int(os.environ["UDP"])))
+print(bind(os.environ["REVERSE_BIN_PORT"]), bind(os.environ["OTHER"]), "out-ok")`
+	for extra, want := range map[string]string{"": "ok denied out-ok", "REVERSE_BIN_BIND_TCP=" + other + "\n": "ok ok out-ok"} {
+		dir := appDir(t, map[string]string{"app.py": script, "data/.keep": "", ".env": "REVERSE_BIN_COMMAND=exec python3 app.py\n" + extra +
+			fmt.Sprintf("PEER=%d\nUDP=%d\nOTHER=%s\n", peer.Addr().(*net.TCPAddr).Port, udp.LocalAddr().(*net.UDPAddr).Port, other)})
+		out, err := exec.Command(bin, dir).Output()
+		var a App
+		if err == nil {
+			err = json.Unmarshal(out, &a)
+		}
+		if err != nil {
+			t.Fatalf("detector: %v\n%s", err, out)
+		}
+		cmd := exec.Command(a.Executable[0], a.Executable[1:]...)
+		cmd.Dir, cmd.Env = a.WorkingDirectory, a.Envs
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr // landrun warns there about what this kernel cannot enforce
+		got, err := cmd.Output()
+		if strings.TrimSpace(string(got)) != want {
+			t.Errorf("%q: app printed %q (%v), want %q\n%s", extra, got, err, want, stderr.Bytes())
+		}
+	}
+}
+
+func freeTestPort(t *testing.T) string {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	return fmt.Sprint(l.Addr().(*net.TCPAddr).Port)
+}

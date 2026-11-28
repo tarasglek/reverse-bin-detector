@@ -30,12 +30,13 @@ The app's `.env`, or `secrets.enc.json` decrypted by sops (age key from `SOPS_AG
 | `REVERSE_BIN_HEALTH_METHOD` | Its method | `HEAD` |
 | `REVERSE_BIN_HEALTH_STATUS` | Status it must answer, `200` or `2xx` | any response |
 | `REVERSE_BIN_PUBLIC_HOST` | Public host the app is served at over https; overrides `--public-host` | from Caddy |
+| `REVERSE_BIN_BIND_TCP` | More TCP ports or ranges the app may bind, e.g. `9229,32000-32768`; `0` allows ephemeral ports | — |
 
 Any other `REVERSE_BIN_*` key is an error.
 
 ## Sandbox
 
-`unshare --pid --kill-child` (descendants die with the app) around [landrun](https://github.com/zouuup/landrun), with `sh` as the namespace's PID 1 so the app itself gets SIGTERM (PID 1 ignores signals it has no handler for): the app dir read-only and executable, `data/` writable, network allowed except for static apps. Requires kernel Landlock ABI ≥ 6 (Linux 6.12+); the detector refuses to plan without it. landrun runs strict, and warns on stderr about restrictions an older kernel cannot enforce. `unshare` and `landrun` are absolute and start with the app's env, so `LD_*`, `GCONV_PATH` and `GLIBC_TUNABLES` are refused there (set them in the launch command). App files are read through `os.Root`, so a symlink out of the app dir is an error; sops runs under landrun with no network. `--as-app-dev` makes the source writable.
+`unshare --pid --kill-child` (descendants die with the app) around [landrun](https://github.com/zouuup/landrun), with `sh` as the namespace's PID 1 so the app itself gets SIGTERM (PID 1 ignores signals it has no handler for): the app dir read-only and executable, `data/` writable, network allowed except for static apps. An app binds only its own TCP port and `REVERSE_BIN_BIND_TCP` (a socket app none), so its code cannot take another app's port or Caddy's. The rule confines the running app, not its owner: `.env` chooses the ports, and `--as-app` commands bind freely. Requires kernel Landlock ABI ≥ 6 (Linux 6.12+); the detector refuses to plan without it. landrun runs strict, and warns on stderr about restrictions an older kernel cannot enforce. `unshare` and `landrun` are absolute and start with the app's env, so `LD_*`, `GCONV_PATH` and `GLIBC_TUNABLES` are refused there (set them in the launch command). App files are read through `os.Root`, so a symlink out of the app dir is an error; sops runs under landrun with no network. `--as-app-dev` makes the source writable.
 
 ## Per-app SSH: `rb-ssh`
 
