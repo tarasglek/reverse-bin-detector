@@ -31,10 +31,6 @@ var etcSymlinks = []string{"resolv.conf"}
 // /run/resolvconf and /run/NetworkManager are legitimate resolv.conf homes.
 var broadDirs = []string{"/", "/run", "/var", "/tmp", "/home", "/root"}
 
-// anyUnixSocket keeps landrun v0.1.17's behaviour on Landlock ABI 9, which
-// landrun v0.2.0 would otherwise restrict: connect to any pathname unix socket.
-var anyUnixSocket = []string{"/"}
-
 // SOPSPolicy restricts sops decrypting an app's secrets: system files, the
 // sops binary, and the age key, with no network. Secrets files are tenant
 // controlled, and their metadata can point sops at KMS, Vault, cloud metadata
@@ -43,7 +39,6 @@ func SOPSPolicy(sopsPath, ageKeyFile string) Policy {
 	p := Policy{
 		readOnlyExec: []string{"/bin", "/usr", "/lib", "/lib64", sopsPath},
 		readOnly:     []string{"/etc"},
-		unix:         anyUnixSocket,
 	}
 	if ageKeyFile != "" {
 		p.readOnly = append(p.readOnly, ageKeyFile)
@@ -62,7 +57,6 @@ func runtimePolicy(appDir string, static bool, socketDir string, etcDir string) 
 		readOnlyExec: []string{"/bin", "/usr", "/lib", "/lib64", "/proc", "/sys/fs/cgroup"},
 		readOnly:     []string{"/etc"},
 		readWrite:    []string{"/dev"},
-		unix:         anyUnixSocket,
 	}
 	// Lstat: landrun follows symlinks, so a tenant's data -> ../other/data
 	// would grant write access to another app.
@@ -85,7 +79,10 @@ func runtimePolicy(appDir string, static bool, socketDir string, etcDir string) 
 		p.readOnly = append(p.readOnly, "/sys")
 		p.unrestrictedNetwork = true
 		granted := slices.Concat(p.readOnly, p.readOnlyExec)
-		p.readOnly = append(p.readOnly, etcSymlinkGrants(etcDir, appDir, granted)...)
+		resolver := etcSymlinkGrants(etcDir, appDir, granted)
+		p.readOnly = append(p.readOnly, resolver...)
+		// Its own sockets, and the resolver's (systemd-resolved's varlink).
+		p.unix = append([]string{appDir}, resolver...)
 	}
 	return p, nil
 }
