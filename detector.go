@@ -193,12 +193,15 @@ func plan(ctx context.Context, appDir, publicHost string, sandboxed bool, comman
 		if writable {
 			p = p.WithWritable(appDir)
 		}
-		// The app binds only its own port (and REVERSE_BIN_BIND_TCP): its code
-		// cannot take another app's port, or Caddy's, with SO_REUSEPORT. This
+		// The app binds its own port, ports the kernel picks (bind to port 0;
+		// dev workers and test servers do this), and REVERSE_BIN_BIND_TCP: its
+		// code cannot choose another app's port, or Caddy's, to share with
+		// SO_REUSEPORT. Port 0 adds nothing: Landlock does not govern autobind,
+		// so listen() without bind() gets a kernel-picked port anyway. This
 		// confines the running app, not its owner: .env chooses the ports, and
 		// --as-app commands (dev sessions) bind as they please.
 		if k != staticApp && !asApp {
-			p.restrictBindTCP, p.bindTCP = true, bindTCP
+			p.bindTCP = append([]string{"0"}, bindTCP...)
 		}
 		// sh, not the app, is PID 1 of the namespace: PID 1 ignores signals it
 		// has no handler for, so most apps would never see reverse-bin's SIGTERM.
@@ -279,16 +282,21 @@ func isFile(appDir, name string) (bool, error) {
 
 var portSpec = regexp.MustCompile(`^[0-9]{1,5}(-[0-9]{1,5})?$`)
 
-// parseBindTCP reads REVERSE_BIN_BIND_TCP: extra TCP ports or ranges the app
-// may bind, comma-separated. landrun checks the numbers' range.
+// parseBindTCP reads REVERSE_BIN_BIND_TCP: extra fixed TCP ports or ranges the
+// app may bind, comma-separated. landrun checks the numbers' range. 0, which
+// v0.4.0 needed for kernel-picked ports, is granted to every app now and is
+// dropped here.
 func parseBindTCP(v string) ([]string, error) {
 	if v == "" {
 		return nil, nil
 	}
-	ports := strings.Split(v, ",")
-	for _, p := range ports {
+	var ports []string
+	for p := range strings.SplitSeq(v, ",") {
 		if !portSpec.MatchString(p) {
 			return nil, fmt.Errorf("%s=%s: want ports or ranges like 9229,32000-32768", KeyReverseBinBindTCP, v)
+		}
+		if p != "0" {
+			ports = append(ports, p)
 		}
 	}
 	return ports, nil

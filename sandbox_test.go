@@ -170,20 +170,16 @@ func TestLandrunArgs(t *testing.T) {
 		readWrite:           []string{"/dev"},
 		unix:                []string{"/apps/demo"},
 		unrestrictedNetwork: true,
-		restrictBindTCP:     true,
-		bindTCP:             []string{"9001", "9229"},
+		bindTCP:             []string{"0", "9001", "9229"},
 	}
 	want := []string{"--rox", "/bin", "--rox", "/usr", "--rwx", "/apps/demo", "--ro", "/etc", "--ro", "/run/systemd/resolve", "--rw", "/dev",
-		"--unix", "/apps/demo", "--unrestricted-network", "--bind-tcp", "9001", "--bind-tcp", "9229"}
+		"--unix", "/apps/demo", "--unrestricted-network", "--bind-tcp", "0", "--bind-tcp", "9001", "--bind-tcp", "9229"}
 	if got := landrunArgs(p); !reflect.DeepEqual(got, want) {
 		t.Fatalf("landrunArgs = %#v, want %#v", got, want)
 	}
-	// No ports listed: bind nothing, rather than anything.
-	p.bindTCP = nil
-	assertContains(t, landrunArgs(p), "--restrict-bind-tcp")
-	p.unrestrictedNetwork, p.restrictBindTCP = false, false
+	p.unrestrictedNetwork, p.bindTCP = false, nil
 	assertNotContains(t, landrunArgs(p), "--unrestricted-network")
-	assertNotContains(t, landrunArgs(p), "--restrict-bind-tcp")
+	assertNotContains(t, landrunArgs(p), "--bind-tcp")
 }
 
 // extraGrants returns values not in the baseline, preserving order.
