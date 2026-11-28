@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +18,9 @@ func TestSOPSPolicy(t *testing.T) {
 	assertContains(t, p.readOnly, "/keys/age.txt")
 	if p.unrestrictedNetwork || len(p.readWrite) > 0 || len(p.readWriteExec) > 0 {
 		t.Fatalf("SOPSPolicy grants network or writes: %#v", p)
+	}
+	if !reflect.DeepEqual(p.unix, []string{"/"}) {
+		t.Fatalf("SOPSPolicy unix = %#v, want any socket as before landrun v0.2.0", p.unix)
 	}
 	if got := SOPSPolicy("/opt/sops", ""); len(got.readOnly) != 1 {
 		t.Fatalf("readOnly without key = %#v, want only /etc", got.readOnly)
@@ -60,6 +64,11 @@ func TestRuntimePolicy(t *testing.T) {
 	assertNotContains(t, static.readWriteExec, filepath.Join(appDir, "data"))
 	if static.unrestrictedNetwork {
 		t.Fatal("static unrestrictedNetwork = true, want false")
+	}
+	for _, q := range []Policy{p, static} {
+		if !reflect.DeepEqual(q.unix, []string{"/"}) {
+			t.Fatalf("unix = %#v, want any socket as before landrun v0.2.0", q.unix)
+		}
 	}
 }
 
@@ -130,11 +139,24 @@ func TestWithWritable(t *testing.T) {
 	assertContains(t, base.readOnlyExec, appDir)
 }
 
+// TestCommand: strict landrun (no --best-effort), env by name, the command
+// after --; --unix only where the kernel enforces it.
 func TestCommand(t *testing.T) {
 	got := Command(Policy{readOnly: []string{"/etc"}}, []string{"A", "B"}, []string{"app", "--rw", "/"})
-	want := []string{"landrun", "--best-effort", "--ro", "/etc", "--env", "A", "--env", "B", "--", "app", "--rw", "/"}
+	want := []string{"landrun", "--ro", "/etc", "--env", "A", "--env", "B", "--", "app", "--rw", "/"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Command = %#v, want %#v", got, want)
+	}
+	// The unix grants reach landrun exactly from UnixABI; below it strict
+	// landrun would refuse them.
+	p := Policy{readOnly: []string{"/etc"}, unix: []string{"/apps/demo", "/run/systemd/resolve"}}
+	for abi, want := range map[int][]string{
+		UnixABI - 1: {"landrun", "--ro", "/etc", "--", "app"},
+		UnixABI:     {"landrun", "--ro", "/etc", "--unix", "/apps/demo", "--unix", "/run/systemd/resolve", "--", "app"},
+	} {
+		if got := commandFor(abi, p, nil, []string{"app"}); !reflect.DeepEqual(got, want) {
+			t.Fatalf("Command on ABI %d = %#v, want %#v", abi, got, want)
+		}
 	}
 }
 
@@ -144,9 +166,11 @@ func TestLandrunArgs(t *testing.T) {
 		readWriteExec:       []string{"/apps/demo"},
 		readOnly:            []string{"/etc", "/run/systemd/resolve"},
 		readWrite:           []string{"/dev"},
+		unix:                []string{"/apps/demo"},
 		unrestrictedNetwork: true,
 	}
-	want := []string{"--rox", "/bin", "--rox", "/usr", "--rwx", "/apps/demo", "--ro", "/etc", "--ro", "/run/systemd/resolve", "--rw", "/dev", "--unrestricted-network"}
+	want := []string{"--rox", "/bin", "--rox", "/usr", "--rwx", "/apps/demo", "--ro", "/etc", "--ro", "/run/systemd/resolve", "--rw", "/dev",
+		"--unix", "/apps/demo", "--unrestricted-network"}
 	if got := landrunArgs(p); !reflect.DeepEqual(got, want) {
 		t.Fatalf("landrunArgs = %#v, want %#v", got, want)
 	}
@@ -224,9 +248,11 @@ func TestLandrunRuntimePolicySurvivesResolvConfReplacement(t *testing.T) {
 	done := make(chan struct{})
 	var out []byte
 	var runErr error
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr // landrun warns there about what this kernel cannot enforce
 	go func() {
 		defer close(done)
-		out, runErr = cmd.CombinedOutput()
+		out, runErr = cmd.Output()
 	}()
 
 	time.Sleep(300 * time.Millisecond)
@@ -296,9 +322,11 @@ func TestLandrunRuntimePolicyAllowsWriteThenExecInData(t *testing.T) {
 	argv := Command(p, nil, []string{"/bin/sh", "-c", script})
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
-	out, err := cmd.CombinedOutput()
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr // landrun warns there about what this kernel cannot enforce
+	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("landrun failed: %v\n%s", err, out)
+		t.Fatalf("landrun failed: %v\n%s", err, stderr.Bytes())
 	}
 	if got, want := string(out), "ran\nsrc-ro\n"; got != want {
 		t.Fatalf("output = %q, want %q", got, want)

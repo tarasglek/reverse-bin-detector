@@ -15,6 +15,7 @@ type Policy struct {
 	readOnlyExec        []string
 	readWriteExec       []string // app data/ and WithWritable
 	readWrite           []string
+	unix                []string // pathname unix sockets it may connect to (ABI 9)
 	unrestrictedNetwork bool
 }
 
@@ -27,6 +28,10 @@ var etcSymlinks = []string{"resolv.conf"}
 // /run/resolvconf and /run/NetworkManager are legitimate resolv.conf homes.
 var broadDirs = []string{"/", "/run", "/var", "/tmp", "/home", "/root"}
 
+// anyUnixSocket keeps landrun v0.1.17's behaviour on Landlock ABI 9, which
+// landrun v0.2.0 would otherwise restrict: connect to any pathname unix socket.
+var anyUnixSocket = []string{"/"}
+
 // SOPSPolicy restricts sops decrypting an app's secrets: system files, the
 // sops binary, and the age key, with no network. Secrets files are tenant
 // controlled, and their metadata can point sops at KMS, Vault, cloud metadata
@@ -35,6 +40,7 @@ func SOPSPolicy(sopsPath, ageKeyFile string) Policy {
 	p := Policy{
 		readOnlyExec: []string{"/bin", "/usr", "/lib", "/lib64", sopsPath},
 		readOnly:     []string{"/etc"},
+		unix:         anyUnixSocket,
 	}
 	if ageKeyFile != "" {
 		p.readOnly = append(p.readOnly, ageKeyFile)
@@ -53,6 +59,7 @@ func runtimePolicy(appDir string, static bool, socketDir string, etcDir string) 
 		readOnlyExec: []string{"/bin", "/usr", "/lib", "/lib64", "/proc", "/sys/fs/cgroup"},
 		readOnly:     []string{"/etc"},
 		readWrite:    []string{"/dev"},
+		unix:         anyUnixSocket,
 	}
 	// Lstat: landrun follows symlinks, so a tenant's data -> ../other/data
 	// would grant write access to another app.
@@ -143,6 +150,9 @@ func landrunArgs(p Policy) []string {
 	for _, path := range p.readWrite {
 		args = append(args, "--rw", path)
 	}
+	for _, path := range p.unix {
+		args = append(args, "--unix", path)
+	}
 	if p.unrestrictedNetwork {
 		args = append(args, "--unrestricted-network")
 	}
@@ -151,13 +161,16 @@ func landrunArgs(p Policy) []string {
 
 // MinLandlockABI is the oldest kernel Landlock ABI the sandbox accepts. ABI 6
 // (Linux 6.12, Debian trixie) covers every right the policies use, including
-// abstract UNIX socket and signal scoping. Newer ABIs only add restrictions,
-// which landrun --best-effort applies when the kernel has them.
+// abstract UNIX socket and signal scoping. landrun applies the newer ABIs'
+// default restrictions when the kernel has them, and warns on stderr when not.
 const MinLandlockABI = 6
 
-// RequireLandlock fails below MinLandlockABI. landrun --best-effort silently
-// degrades to no sandbox at all on a kernel without Landlock, so every plan
-// that runs landrun must be gated by this check.
+// UnixABI is the Landlock ABI that restricts pathname unix socket connects.
+// landrun's strict mode refuses --unix below it, so it is passed only from it.
+const UnixABI = 9
+
+// RequireLandlock fails below MinLandlockABI, so every plan that runs landrun
+// has every right its policy uses.
 func RequireLandlock() error {
 	if abi := landlockABI(); abi < MinLandlockABI {
 		return fmt.Errorf("kernel Landlock ABI %d < %d: refusing to run without a sandbox", abi, MinLandlockABI)
@@ -167,13 +180,19 @@ func RequireLandlock() error {
 
 // Command wraps command in landrun restricted to p. Environment variables are
 // passed by name: landrun copies their values from its own environment, so
-// secrets never appear in argv, which every host user can read.
-//
-// landrun v0.1.17 fails with `Failed to find binary: exec: ""` when command[0]
-// equals the name of a landrun flag in use (env, rox, ...); callers spell such
-// commands with an absolute path, e.g. /usr/bin/env.
+// secrets never appear in argv, which every host user can read. No
+// --best-effort: an option the kernel cannot enforce is an error, not a
+// silently weaker sandbox.
 func Command(p Policy, envNames []string, command []string) []string {
-	argv := append([]string{"landrun", "--best-effort"}, landrunArgs(p)...)
+	return commandFor(landlockABI(), p, envNames, command)
+}
+
+// commandFor is Command on a kernel with Landlock ABI abi.
+func commandFor(abi int, p Policy, envNames []string, command []string) []string {
+	if abi < UnixABI {
+		p.unix = nil
+	}
+	argv := append([]string{"landrun"}, landrunArgs(p)...)
 	for _, name := range envNames {
 		argv = append(argv, "--env", name)
 	}

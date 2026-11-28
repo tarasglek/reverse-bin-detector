@@ -53,7 +53,7 @@ func waitFor(cond func() bool) bool {
 func TestKindsServeHTTP(t *testing.T) {
 	bin, _ := buildBinary(t, t.TempDir())
 	if _, err := os.Stat("/usr/lib/reverse-bin/deno"); err == nil {
-		t.Setenv("PATH", "/usr/lib/reverse-bin:"+os.Getenv("PATH"))
+		t.Setenv("PATH", os.Getenv("PATH")+":/usr/lib/reverse-bin") // its deno, not its landrun
 	}
 	for name, files := range map[string]map[string]string{
 		"explicit": {".env": "REVERSE_BIN_COMMAND=exec python3 -m http.server \"$REVERSE_BIN_PORT\" --bind \"$REVERSE_BIN_HOST\"\n", "data/.keep": ""},
