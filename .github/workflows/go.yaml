@@ -27,9 +27,7 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
-      # Same landrun as reverse-bin-hosting's runtime-versions.env; v0.2.0
-      # changes sandbox behaviour and output.
-      - run: go install github.com/zouuup/landrun/cmd/landrun@v0.1.17
+      - run: make landrun
       # Ubuntu's AppArmor blocks the unprivileged user namespaces unshare needs.
       - run: |
           if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then

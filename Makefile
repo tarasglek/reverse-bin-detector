@@ -5,7 +5,13 @@ NOTES_MAX_WORDS ?= 100
 # Fixers rewrite the same files; never run targets in parallel.
 .NOTPARALLEL:
 
-.PHONY: test build check deps-check deps-latest modernize vulncheck release-notes
+.PHONY: landrun test build check deps-check deps-latest modernize vulncheck release-notes
+
+# The landrun reverse-bin-hosting ships (packaging/runtime-versions.env).
+LANDRUN_VERSION = v0.2.0
+
+landrun:
+	go install github.com/zouuup/landrun/cmd/landrun@$(LANDRUN_VERSION)
 
 test:
 	go test -race ./...
