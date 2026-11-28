@@ -59,6 +59,20 @@ const (
 	staticApp   kind = "static"
 )
 
+// preSandboxEnv is glibc's UNSECURE_ENVVARS (sysdeps/generic/unsecvars.h,
+// glibc 2.41), the variables it drops for setuid programs, without LD_*
+// (refused by prefix) and without those an app sets for itself that nothing
+// before the sandbox acts on harmfully: TMPDIR (the detector's own default),
+// TZDIR, the resolver's HOSTALIASES, LOCALDOMAIN, RES_OPTIONS and
+// RESOLV_HOST_CONF, and the malloc tunables, which only size unshare's
+// allocator. Before the sandbox only unshare runs glibc with the app's env
+// (landrun is static Go); it calls setlocale, gettext and getpwuid (so NSS
+// loads, hence NIS_PATH), but no resolver, time-zone or temporary-file
+// function.
+var preSandboxEnv = []string{
+	"GCONV_PATH", "GETCONF_DIR", "GLIBC_TUNABLES", "LOCPATH", "MALLOC_TRACE", "NIS_PATH", "NLSPATH",
+}
+
 // plan builds the App for appDir. A non-nil command replaces the app's own
 // (--as-app); writable makes the source writable (--as-app-dev).
 func plan(ctx context.Context, appDir, publicHost string, sandboxed bool, command []string, writable bool) (App, error) {
@@ -75,9 +89,9 @@ func plan(ctx context.Context, appDir, publicHost string, sandboxed bool, comman
 		if strings.HasPrefix(k, "REVERSE_BIN_") && !slices.Contains(knownKeys, k) {
 			return App{}, fmt.Errorf("unknown key %s; known: %s", k, strings.Join(knownKeys, ", "))
 		}
-		// unshare and landrun start with the app's env: the dynamic loader
-		// would run code these name before the sandbox exists.
-		if strings.HasPrefix(k, "LD_") || k == "GCONV_PATH" || k == "GLIBC_TUNABLES" {
+		// unshare and landrun start with the app's env, before the sandbox
+		// exists: the dynamic loader and glibc would act on these there.
+		if strings.HasPrefix(k, "LD_") || slices.Contains(preSandboxEnv, k) {
 			return App{}, fmt.Errorf("%s would act before the sandbox; set it in the launch command instead", k)
 		}
 	}
